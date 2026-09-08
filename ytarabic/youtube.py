@@ -11,6 +11,7 @@ from .config import (
     QUALITY_OPTIONS, RETRY_WAIT, SUB_EXTS, VALID_VIDEO_EXTS, VIDEO_EXTS,
     get_fmt,
 )
+from .errors import Cancelled
 
 LogFn = Callable[[str, str], None]
 
@@ -232,6 +233,9 @@ def download_with_retry(url: str, opts: dict, output_dir: Path,
                 fetch_subtitles_fn(url, output_dir)
             return True
 
+        except Cancelled:
+            raise   # user-requested stop — never retried, let the caller handle it
+
         except Exception as e:
             err = str(e).lower()
             if any(x in err for x in ["private", "unavailable", "removed", "copyright"]):
@@ -259,9 +263,11 @@ def download_with_retry(url: str, opts: dict, output_dir: Path,
 #  Single video
 # ─────────────────────────────────────────────
 def download_single(url: str, quality_key: str, log: LogFn = _default_log,
-                     on_video_progress: Optional[Callable] = None) -> Optional[Path]:
-    """Downloads one video to DOWNLOAD_DIR/single. Returns the output
-    directory on success, None on failure."""
+                     on_video_progress: Optional[Callable] = None,
+                     should_stop: Optional[Callable[[], bool]] = None) -> Optional[dict]:
+    """Downloads one video to DOWNLOAD_DIR/single. Returns
+    {"output_dir": Path, "title": str} on success, None on failure or
+    if stopped by the user."""
     from .subtitles import fetch_subtitles
 
     audio_only = quality_key == "6"
@@ -270,23 +276,29 @@ def download_single(url: str, quality_key: str, log: LogFn = _default_log,
     output_dir.mkdir(parents=True, exist_ok=True)
     opts = build_ydl_opts(output_dir, fmt, audio_only, progress_hook=on_video_progress)
 
+    title = url
     try:
         with yt_dlp.YoutubeDL(base_opts()) as ydl:
             info = ydl.extract_info(url, download=False)
             vid_id = info.get("id", "") if info else ""
+            title  = info.get("title", url) if info else url
             if vid_id:
                 delete_old_versions(output_dir, vid_id, log)
     except Exception:
         pass
 
     log("Downloading...", "info")
-    ok = download_with_retry(
-        url, opts, output_dir, label=url, log=log,
-        fetch_subtitles_fn=lambda u, d: fetch_subtitles(u, d, log),
-    )
+    try:
+        ok = download_with_retry(
+            url, opts, output_dir, label=url, log=log,
+            fetch_subtitles_fn=lambda u, d: fetch_subtitles(u, d, log, should_stop),
+        )
+    except Cancelled:
+        log("Stopped by user.", "warn")
+        return None
     if ok:
         log(f"Saved to: {output_dir.resolve()}", "success")
-        return output_dir
+        return {"output_dir": output_dir, "title": title}
     return None
 
 
@@ -314,12 +326,16 @@ def read_playlist_info(url: str, log: LogFn = _default_log) -> Optional[dict]:
 def download_playlist(url: str, quality_key: str, entries: list,
                        playlist_title: str, log: LogFn = _default_log,
                        on_video_progress: Optional[Callable] = None,
-                       on_item_start: Optional[Callable[[int, int, str], None]] = None) -> dict:
+                       on_item_start: Optional[Callable[[int, int, str], None]] = None,
+                       should_stop: Optional[Callable[[], bool]] = None) -> dict:
     """
     Download every not-yet-completed video in `entries` (from
     read_playlist_info) at `quality_key`. Progress is tracked per
     (video_id, quality_key) so re-running only fetches what's missing.
-    Returns a summary dict: output_dir, total, already_done, done, failed.
+    If should_stop() returns True (checked between videos — a video
+    already in flight is cancelled instead, via on_video_progress
+    raising Cancelled), the loop ends early and stopped=True is set.
+    Returns a summary dict: output_dir, total, already_done, done, failed, stopped.
     """
     from .progress_store import load_progress, mark_done
     from .subtitles import fetch_subtitles
@@ -335,10 +351,17 @@ def download_playlist(url: str, quality_key: str, entries: list,
     done_list = progress.get(url, {}).get("done", [])
     remaining = [e for e in entries if f"{e.get('id')}_{quality_key}" not in done_list]
 
-    opts   = build_ydl_opts(output_dir, fmt, audio_only, progress_hook=on_video_progress)
-    failed = []
+    opts      = build_ydl_opts(output_dir, fmt, audio_only, progress_hook=on_video_progress)
+    failed    = []
+    done_now  = 0
+    stopped   = False
 
     for idx, entry in enumerate(remaining, 1):
+        if should_stop and should_stop():
+            log("Stopped by user.", "warn")
+            stopped = True
+            break
+
         video_id  = entry.get("id", "")
         video_url = f"https://www.youtube.com/watch?v={video_id}"
         title     = entry.get("title", f"Video {idx}")
@@ -348,12 +371,18 @@ def download_playlist(url: str, quality_key: str, entries: list,
             on_item_start(idx, len(remaining), title)
 
         delete_old_versions(output_dir, video_id, log)
-        success = download_with_retry(
-            video_url, opts, output_dir, label=title, log=log,
-            fetch_subtitles_fn=lambda u, d: fetch_subtitles(u, d, log),
-        )
+        try:
+            success = download_with_retry(
+                video_url, opts, output_dir, label=title, log=log,
+                fetch_subtitles_fn=lambda u, d: fetch_subtitles(u, d, log, should_stop),
+            )
+        except Cancelled:
+            log("Stopped by user.", "warn")
+            stopped = True
+            break
         if success:
             mark_done(progress, url, done_key, title)
+            done_now += 1
         else:
             failed.append(title)
 
@@ -361,24 +390,35 @@ def download_playlist(url: str, quality_key: str, entries: list,
         "output_dir":    output_dir,
         "total":         len(entries),
         "already_done":  len(entries) - len(remaining),
-        "done":          len(remaining) - len(failed),
+        "done":          done_now,
         "failed":        failed,
+        "stopped":       stopped,
     }
 
 
 def download_instagram_reels(urls: list, log: LogFn = _default_log,
-                              on_video_progress: Optional[Callable] = None) -> dict:
-    """Download one or more Instagram Reels. Returns {output_dir, ok, failed}."""
+                              on_video_progress: Optional[Callable] = None,
+                              should_stop: Optional[Callable[[], bool]] = None) -> dict:
+    """Download one or more Instagram Reels. Returns {output_dir, ok, total, failed, stopped}."""
     output_dir = DOWNLOAD_DIR / "instagram"
     output_dir.mkdir(parents=True, exist_ok=True)
     opts = build_instagram_opts(output_dir, progress_hook=on_video_progress)
 
-    ok, failed = 0, []
+    ok, failed, stopped = 0, [], False
     for i, url in enumerate(urls, 1):
+        if should_stop and should_stop():
+            log("Stopped by user.", "warn")
+            stopped = True
+            break
         log(f"[{i}/{len(urls)}] {url}" if len(urls) > 1 else "Downloading...", "info")
-        if download_with_retry(url, opts, output_dir, label=url, log=log):
-            ok += 1
-        else:
-            failed.append(url)
+        try:
+            if download_with_retry(url, opts, output_dir, label=url, log=log):
+                ok += 1
+            else:
+                failed.append(url)
+        except Cancelled:
+            log("Stopped by user.", "warn")
+            stopped = True
+            break
 
-    return {"output_dir": output_dir, "ok": ok, "total": len(urls), "failed": failed}
+    return {"output_dir": output_dir, "ok": ok, "total": len(urls), "failed": failed, "stopped": stopped}

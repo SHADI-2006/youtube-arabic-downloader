@@ -18,6 +18,7 @@ from .config import (
     AR_TAGS, GEMINI_MODEL, GEMINI_RETRIES, GEMINI_RETRY_WAIT,
     HAS_FFMPEG, SUB_EXTS, SUBTITLES_EN, UTF8_BOM,
 )
+from .errors import Cancelled
 from .youtube import base_opts, build_subtitle_opts
 
 LogFn = Callable[[str, str], None]
@@ -320,9 +321,11 @@ def is_youtube(url: str) -> bool:
 # ─────────────────────────────────────────────
 #  Main entry point — the full Arabic subtitle priority chain
 # ─────────────────────────────────────────────
-def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log):
+def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log,
+                     should_stop: Optional[Callable[[], bool]] = None):
     """
-    Arabic subtitle priority (never raises — every step is best-effort):
+    Arabic subtitle priority (never raises except Cancelled — every
+    step is otherwise best-effort):
       1. Real, human-authored Arabic subtitle — used as-is, nothing beats it.
       2. No manual Arabic: download English and translate with Gemini
          (priority engine — reads the whole file for natural, connected
@@ -332,12 +335,19 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log):
       4. That's unavailable too: fall back to Google Translate
          (deep-translator) on the English text — always free, no key,
          last resort so a translation always happens.
+    should_stop(), if given, is checked before each tier and raises
+    Cancelled to stop the whole chain (e.g. mid-translation) early.
     Silently skips non-YouTube URLs (Twitter, Instagram, etc.)
     """
     if not is_youtube(url):
         return
 
+    def _check_stop():
+        if should_stop and should_stop():
+            raise Cancelled("stop requested")
+
     manual_lang, auto_lang = arabic_lang_options(url)
+    _check_stop()
 
     # 1) Real, human-made Arabic subtitle
     if manual_lang:
@@ -354,6 +364,7 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log):
             return
 
     # 2) No manual Arabic — download English as the source to translate
+    _check_stop()
     log("No manual Arabic sub — downloading English to translate...", "info")
     before = {f for f in output_dir.iterdir() if f.suffix in SUB_EXTS} if output_dir.exists() else set()
     en_opts = build_subtitle_opts(output_dir, SUBTITLES_EN)
@@ -370,8 +381,10 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log):
         return
 
     # 3) Gemini — priority translation engine
+    _check_stop()
     remaining = []
     for f in new_en_subs:
+        _check_stop()
         translated = translate_srt_to_arabic_gemini(f, log)
         if translated:
             log(f"Arabic translation saved (Gemini): {translated.name}", "success")
@@ -382,6 +395,7 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log):
 
     # 4) Gemini unavailable/failed — try YouTube's own auto-translated
     #    Arabic captions before falling back to our own Google Translate call
+    _check_stop()
     if auto_lang:
         log(f"Trying YouTube's own Arabic translation ({auto_lang})...", "info")
         yt_ar_opts = build_subtitle_opts(output_dir, [auto_lang])
@@ -396,7 +410,9 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log):
             return
 
     # 5) Final fallback — Google Translate (deep-translator), always free
+    _check_stop()
     for f in remaining:
+        _check_stop()
         translated = translate_srt_to_arabic(f, log)
         if translated:
             log(f"Arabic translation saved (Google Translate): {translated.name}", "success")

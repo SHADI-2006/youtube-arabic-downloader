@@ -25,6 +25,7 @@
     <button class="tab" data-tab="extract">Transcript &amp; X</button>
     <button class="tab" data-tab="instagram">Instagram</button>
     <button class="tab" data-tab="subs">Fix Subtitles</button>
+    <button class="tab" data-tab="history">History</button>
   </nav>
 
   <div class="workspace">
@@ -107,14 +108,26 @@
       <p class="hint">Fetch a missing Arabic subtitle without re-downloading the video.</p>
       <div id="subsList" class="cards"></div>
     </section>
+
+    <!-- History -->
+    <section class="panel" id="tab-history">
+      <div class="row between">
+        <p class="hint">Everything downloaded or extracted so far, newest first.</p>
+        <button class="btn ghost" id="btnRefreshHistory">Refresh</button>
+      </div>
+      <div id="historyList" class="cards"></div>
+    </section>
   </main>
 
   <aside class="console">
     <div class="console-head">
       <span class="console-title">Activity</span>
+      <button class="btn stop hidden" id="btnStop">■ Stop</button>
+    </div>
+    <div class="progress-row">
+      <div class="progress"><div class="bar" id="progressBar"></div></div>
       <span class="progress-label" id="progressLabel">Idle</span>
     </div>
-    <div class="progress"><div class="bar" id="progressBar"></div></div>
     <div class="log" id="log"></div>
     <div class="console-foot" id="downloadDir"></div>
   </aside>

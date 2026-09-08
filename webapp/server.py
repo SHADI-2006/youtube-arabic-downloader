@@ -20,7 +20,9 @@ from pydantic import BaseModel
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ytarabic import config, social, subtitles, transcript, youtube
-from ytarabic.progress_store import load_progress
+from ytarabic.errors import Cancelled
+from ytarabic.progress_store import load_history, load_progress, log_history
+from ytarabic.utils import fmt_size
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -41,10 +43,11 @@ app = FastAPI(title="ytarabic", docs_url="/api/docs", lifespan=lifespan)
 class JobManager:
     def __init__(self):
         self.events: "queue.Queue[dict]" = queue.Queue()
-        self.clients: set = set()      # every connected browser tab
-        self.history: list = []        # replayed to tabs that join mid-job
+        self.clients: set = set()       # every connected browser tab
+        self.activity: list = []        # this job's events, replayed to tabs that join mid-job
         self.busy = False
         self.current = ""
+        self._stop_requested = False
 
     def emit(self, kind: str, **payload):
         self.events.put({"kind": kind, **payload})
@@ -55,16 +58,27 @@ class JobManager:
     def progress(self, fraction: float, label: str = ""):
         self.emit("progress", fraction=max(0.0, min(1.0, fraction)), label=label)
 
+    def should_stop(self) -> bool:
+        return self._stop_requested
+
+    def request_stop(self):
+        self._stop_requested = True
+        self.log("Stopping…", "warn")
+
     def video_hook(self, d):
-        """yt-dlp progress_hook → browser progress bar."""
+        """yt-dlp progress_hook → browser progress bar. Adaptive units
+        (bytes/KB/MB/GB) instead of always MB, and raises Cancelled to
+        abort the in-flight download when a stop was requested."""
+        if self._stop_requested:
+            raise Cancelled("stop requested")
         if d["status"] == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate")
             done = d.get("downloaded_bytes", 0)
             if total:
                 speed = d.get("speed") or 0
-                label = f"{done/1_048_576:.1f} / {total/1_048_576:.1f} MB"
+                label = f"{fmt_size(done)} / {fmt_size(total)}"
                 if speed:
-                    label += f"  ·  {speed/1_048_576:.1f} MB/s"
+                    label += f"  ·  {fmt_size(speed)}/s"
                 self.progress(done / total, label)
         elif d["status"] == "finished":
             self.progress(1.0, "Processing…")
@@ -75,18 +89,22 @@ class JobManager:
             return False
         self.busy = True
         self.current = name
+        self._stop_requested = False
         self.emit("state", busy=True, job=name)
 
-        self.history.clear()   # each job starts a fresh activity log
+        self.activity.clear()   # each job starts a fresh activity log
 
         def worker():
             try:
                 fn()
+            except Cancelled:
+                self.log("Stopped by user.", "warn")
             except Exception as exc:
                 self.log(f"Unexpected error: {exc}", "error")
             finally:
                 self.busy = False
                 self.current = ""
+                self._stop_requested = False
                 self.progress(0.0, "")
                 self.emit("state", busy=False, job="")
                 self.emit("done")
@@ -167,6 +185,7 @@ def start_download(req: DownloadRequest):
             info = youtube.read_playlist_info(req.url, log=jobs.log)
             if not info:
                 jobs.log("Could not read playlist.", "error")
+                log_history("playlist", req.url, "failed", "could not read playlist")
                 return
             entries = [e for e in info.get("entries", []) if e]
             title = info.get("title", "playlist")
@@ -175,16 +194,33 @@ def start_download(req: DownloadRequest):
                 req.url, req.quality, entries, title,
                 log=jobs.log, on_video_progress=jobs.video_hook,
                 on_item_start=lambda i, n, t: jobs.emit("item", index=i, total=n, title=t),
+                should_stop=jobs.should_stop,
             )
-            jobs.log(f"Finished — saved to {result['output_dir'].resolve()}", "success")
-            if result["failed"]:
-                jobs.log(f"Failed ({len(result['failed'])}): " + ", ".join(result["failed"][:5]), "warn")
+            status = "cancelled" if result["stopped"] else ("failed" if result["failed"] and not result["done"] else "success")
+            if result["stopped"]:
+                jobs.log(f"Stopped — {result['done']}/{result['total'] - result['already_done']} downloaded before stopping.", "warn")
+            else:
+                jobs.log(f"Finished — saved to {result['output_dir'].resolve()}", "success")
+                if result["failed"]:
+                    jobs.log(f"Failed ({len(result['failed'])}): " + ", ".join(result["failed"][:5]), "warn")
+            log_history("playlist", title, status,
+                        f"{result['done']} downloaded, {len(result['failed'])} failed")
         else:
-            out = youtube.download_single(
-                req.url, req.quality, log=jobs.log, on_video_progress=jobs.video_hook
-            )
-            if out and req.with_transcript and req.quality != "6":
-                transcript.extract_transcript(req.url, log=jobs.log)
+            try:
+                out = youtube.download_single(
+                    req.url, req.quality, log=jobs.log, on_video_progress=jobs.video_hook,
+                    should_stop=jobs.should_stop,
+                )
+            except Cancelled:
+                jobs.log("Stopped by user.", "warn")
+                out = None
+            if out:
+                log_history("video", out["title"], "success", req.quality)
+                if req.with_transcript and req.quality != "6":
+                    transcript.extract_transcript(req.url, log=jobs.log)
+            else:
+                status = "cancelled" if jobs.should_stop() else "failed"
+                log_history("video", req.url, status, req.quality)
 
     if not jobs.start("download", task):
         return {"ok": False, "error": "A job is already running"}
@@ -193,14 +229,22 @@ def start_download(req: DownloadRequest):
 
 @app.post("/api/transcript")
 def start_transcript(req: UrlRequest):
-    if not jobs.start("transcript", lambda: transcript.extract_transcript(req.url, log=jobs.log)):
+    def task():
+        out = transcript.extract_transcript(req.url, log=jobs.log)
+        log_history("transcript", out.stem if out else req.url, "success" if out else "failed")
+
+    if not jobs.start("transcript", task):
         return {"ok": False, "error": "A job is already running"}
     return {"ok": True}
 
 
 @app.post("/api/tweet")
 def start_tweet(req: UrlRequest):
-    if not jobs.start("tweet", lambda: social.extract_tweet(req.url, log=jobs.log)):
+    def task():
+        out = social.extract_tweet(req.url, log=jobs.log)
+        log_history("tweet", out.name if out else req.url, "success" if out else "failed")
+
+    if not jobs.start("tweet", task):
         return {"ok": False, "error": "A job is already running"}
     return {"ok": True}
 
@@ -209,15 +253,29 @@ def start_tweet(req: UrlRequest):
 def start_instagram(req: UrlsRequest):
     def task():
         result = youtube.download_instagram_reels(
-            req.urls, log=jobs.log, on_video_progress=jobs.video_hook
+            req.urls, log=jobs.log, on_video_progress=jobs.video_hook,
+            should_stop=jobs.should_stop,
         )
-        jobs.log(
-            f"Done — {result['ok']}/{result['total']} downloaded → {result['output_dir'].resolve()}",
-            "success",
-        )
+        if result["stopped"]:
+            jobs.log(f"Stopped — {result['ok']}/{result['total']} downloaded before stopping.", "warn")
+        else:
+            jobs.log(
+                f"Done — {result['ok']}/{result['total']} downloaded → {result['output_dir'].resolve()}",
+                "success",
+            )
+        status = "cancelled" if result["stopped"] else ("failed" if not result["ok"] else "success")
+        log_history("instagram", f"{result['ok']}/{result['total']} reels", status)
 
     if not jobs.start("instagram", task):
         return {"ok": False, "error": "A job is already running"}
+    return {"ok": True}
+
+
+@app.post("/api/stop")
+def stop_job():
+    if not jobs.busy:
+        return {"ok": False, "error": "Nothing is running"}
+    jobs.request_stop()
     return {"ok": True}
 
 
@@ -243,13 +301,15 @@ def fetch_subtitle(req: SubtitleRequest):
 
     def task():
         jobs.log(f"Fetching subtitle for {req.video_id}…", "info")
-        subtitles.fetch_subtitles(url, folder, log=jobs.log)
+        subtitles.fetch_subtitles(url, folder, log=jobs.log, should_stop=jobs.should_stop)
         tag = f"[{req.video_id}]"
         subs = {f for f in folder.iterdir() if f.suffix in config.SUB_EXTS and tag in f.name}
-        if subtitles.has_arabic_subtitle(subs):
+        found = subtitles.has_arabic_subtitle(subs)
+        if found:
             jobs.log("Done — Arabic subtitle saved.", "success")
         else:
             jobs.log("Still no Arabic subtitle available for this video.", "warn")
+        log_history("subtitle", req.video_id, "success" if found else "failed")
 
     if not jobs.start("subtitle", task):
         return {"ok": False, "error": "A job is already running"}
@@ -284,18 +344,32 @@ def resume(req: UrlRequest):
         info = youtube.read_playlist_info(req.url, log=jobs.log)
         if not info:
             jobs.log("Could not re-read playlist.", "error")
+            log_history("playlist", req.url, "failed", "could not re-read playlist")
             return
         entries = [e for e in info.get("entries", []) if e]
+        title = info.get("title", "playlist")
         result = youtube.download_playlist(
-            req.url, key, entries, info.get("title", "playlist"),
+            req.url, key, entries, title,
             log=jobs.log, on_video_progress=jobs.video_hook,
             on_item_start=lambda i, n, t: jobs.emit("item", index=i, total=n, title=t),
+            should_stop=jobs.should_stop,
         )
-        jobs.log(f"Finished — saved to {result['output_dir'].resolve()}", "success")
+        status = "cancelled" if result["stopped"] else ("failed" if result["failed"] and not result["done"] else "success")
+        if result["stopped"]:
+            jobs.log(f"Stopped — {result['done']} downloaded before stopping.", "warn")
+        else:
+            jobs.log(f"Finished — saved to {result['output_dir'].resolve()}", "success")
+        log_history("playlist", title, status,
+                    f"{result['done']} downloaded, {len(result['failed'])} failed")
 
     if not jobs.start("resume", task):
         return {"ok": False, "error": "A job is already running"}
     return {"ok": True}
+
+
+@app.get("/api/history")
+def history():
+    return {"entries": load_history()}
 
 
 # ─────────────────────────────────────────────
@@ -314,8 +388,8 @@ async def _broadcast_loop():
             await asyncio.sleep(0.08)
             continue
 
-        jobs.history.append(event)
-        del jobs.history[:-400]
+        jobs.activity.append(event)
+        del jobs.activity[:-400]
 
         for ws in list(jobs.clients):
             try:
@@ -329,7 +403,7 @@ async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     jobs.clients.add(ws)
     try:
-        for event in jobs.history[-400:]:   # catch up a tab opened mid-job
+        for event in jobs.activity[-400:]:   # catch up a tab opened mid-job
             await ws.send_json(event)
         while True:
             await ws.receive_text()          # blocks until the tab goes away

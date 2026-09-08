@@ -11,6 +11,7 @@ document.querySelectorAll(".tab").forEach((btn) => {
     $("tab-" + btn.dataset.tab).classList.add("active");
     if (btn.dataset.tab === "resume") loadResume();
     if (btn.dataset.tab === "subs") searchSubs();
+    if (btn.dataset.tab === "history") loadHistory();
   });
 });
 
@@ -30,8 +31,17 @@ function setProgress(fraction, label) {
 
 function setBusy(state) {
   busy = state;
-  document.querySelectorAll(".btn").forEach((b) => (b.disabled = state));
+  document.querySelectorAll(".btn").forEach((b) => {
+    if (b.id !== "btnStop") b.disabled = state;
+  });
+  $("btnStop").classList.toggle("hidden", !state);
+  $("btnStop").disabled = false;
 }
+
+$("btnStop").addEventListener("click", () => {
+  $("btnStop").disabled = true;
+  post("/api/stop", {});
+});
 
 // ── websocket ─────────────────────────────────
 function connect() {
@@ -48,7 +58,9 @@ function connect() {
     else if (e.kind === "state") setBusy(e.busy);
     else if (e.kind === "done") {
       setProgress(0, "Idle");
-      if (document.querySelector('.tab[data-tab="subs"]').classList.contains("active")) searchSubs();
+      const activeTab = document.querySelector(".tab.active").dataset.tab;
+      if (activeTab === "subs") searchSubs();
+      if (activeTab === "history") loadHistory();
     }
   };
   ws.onclose = () => {
@@ -206,3 +218,38 @@ async function searchSubs() {
 }
 $("btnSearchSubs").addEventListener("click", searchSubs);
 $("subQuery").addEventListener("keydown", (e) => e.key === "Enter" && searchSubs());
+
+// ── history ───────────────────────────────────
+const KIND_LABEL = {
+  video: "Video", playlist: "Playlist", transcript: "Transcript",
+  tweet: "X thread", instagram: "Instagram", subtitle: "Subtitle",
+};
+const STATUS_DOT = { success: "●", failed: "●", cancelled: "◐" };
+
+async function loadHistory() {
+  const { entries } = await (await fetch("/api/history")).json();
+  const box = $("historyList");
+  if (!entries.length) {
+    box.innerHTML = `<p class="empty">Nothing downloaded yet.</p>`;
+    return;
+  }
+  box.innerHTML = entries
+    .map((e) => {
+      const when = new Date(e.time).toLocaleString(undefined, {
+        month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+      });
+      return `
+      <div class="card">
+        <div class="card-main">
+          <div class="card-title">
+            <span class="kind-tag">${KIND_LABEL[e.kind] || e.kind}</span>
+            &nbsp;${e.title || "(untitled)"}
+          </div>
+          <div class="card-sub">${when}${e.detail ? " · " + e.detail : ""}</div>
+        </div>
+        <span class="status-dot ${e.status}" title="${e.status}">${STATUS_DOT[e.status] || "●"}</span>
+      </div>`;
+    })
+    .join("");
+}
+$("btnRefreshHistory").addEventListener("click", loadHistory);

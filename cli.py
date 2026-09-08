@@ -137,8 +137,8 @@ def action_download_single(url: str):
         return
     if not Confirm.ask("\n  Start download?", default=True):
         return
-    output_dir = run_with_progress("Downloading", youtube.download_single, url, quality_key, log=log)
-    if output_dir and quality_key != "6":
+    result = run_with_progress("Downloading", youtube.download_single, url, quality_key, log=log)
+    if result and quality_key != "6":
         if Confirm.ask("\n  Extract transcript too?", default=False):
             transcript.extract_transcript(url, log=log)
 

@@ -11,7 +11,11 @@ extracting clean transcripts to feed into an LLM for analysis.
 ## Features
 
 - **YouTube video & playlist download** — resumable, quality selection
-  (360p–4K or audio-only), automatic retry on network failures.
+  (360p–4K or audio-only), automatic retry on network failures, and a
+  **Stop button** that cancels cleanly mid-download or mid-translation.
+- **Download history** — every download, transcript, and extraction is
+  logged (title, time, status), so you can see what happened even after
+  closing the browser tab.
 - **Arabic subtitles, always** — a 4-tier priority chain finds the best
   Arabic subtitle available, and translates one itself if YouTube has none:
   1. Real, human-authored Arabic subtitle (if YouTube has one).
