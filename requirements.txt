@@ -1,0 +1,5 @@
+yt-dlp>=2026.3.17
+deep-translator>=1.11.4
+google-genai>=2.20.0
+rich>=15.0.0
+customtkinter>=6.0.0

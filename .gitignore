@@ -1,0 +1,22 @@
+# Personal downloaded content — never publish this
+downloads/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Editors — settings.json has a machine-specific interpreter path, kept local only
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Secrets — never commit these (use environment variables instead)
+.env
+*.env
+*cookies*.txt
