@@ -1,7 +1,23 @@
-"""Central settings — edit these to match your setup."""
+"""
+Central settings.
 
+Configuration comes from environment variables, and from a local `.env`
+file in the project root if one exists (never committed — see .gitignore).
+The `.env` file wins only where the variable isn't already set in the
+environment, so an explicit shell variable always takes precedence.
+"""
+
+import os
 import shutil
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(PROJECT_ROOT / ".env")
+except ImportError:
+    pass   # optional — env vars still work without it
 
 DOWNLOAD_DIR  = Path("downloads")
 PROGRESS_FILE = DOWNLOAD_DIR / ".progress.json"
@@ -9,10 +25,9 @@ PROGRESS_FILE = DOWNLOAD_DIR / ".progress.json"
 MAX_RETRIES = 5     # retries per video on network failure
 RETRY_WAIT  = 15    # seconds between retries
 
-# Cookies file exported from browser (fixes bot detection).
-# Use extension "Get cookies.txt LOCALLY" on YouTube, then set path here,
-# or set the YT_COOKIES_FILE environment variable instead.
-import os
+# Cookies file exported from the browser (fixes YouTube bot-detection).
+# Export with the "Get cookies.txt LOCALLY" extension, then point
+# YT_COOKIES_FILE at it (shell variable or .env entry).
 COOKIES_FILE = os.environ.get("YT_COOKIES_FILE", "")
 
 # Instagram cookies (optional) — only needed for private accounts or

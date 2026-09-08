@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ytarabic — downloader</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬇</text></svg>" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">⬇</span>
+      <div>
+        <h1>ytarabic</h1>
+        <p class="tagline">YouTube · Instagram · X — with automatic Arabic subtitles</p>
+      </div>
+    </div>
+    <div class="pills" id="statusPills"></div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="download">Download</button>
+    <button class="tab" data-tab="resume">Resume</button>
+    <button class="tab" data-tab="extract">Transcript &amp; X</button>
+    <button class="tab" data-tab="instagram">Instagram</button>
+    <button class="tab" data-tab="subs">Fix Subtitles</button>
+  </nav>
+
+  <div class="workspace">
+  <main>
+    <!-- Download -->
+    <section class="panel active" id="tab-download">
+      <label class="field">
+        <span>Video or playlist URL</span>
+        <input type="text" id="dlUrl" placeholder="https://www.youtube.com/watch?v=…" />
+      </label>
+
+      <div class="row">
+        <label class="field grow">
+          <span>Quality</span>
+          <select id="dlQuality"></select>
+        </label>
+        <button class="btn ghost" id="btnSizes">Estimate sizes</button>
+      </div>
+
+      <div class="row checks">
+        <label class="check"><input type="checkbox" id="dlPlaylist" /> <span>This is a playlist</span></label>
+        <label class="check"><input type="checkbox" id="dlTranscript" /> <span>Also extract transcript</span></label>
+      </div>
+
+      <div id="playlistPreview" class="preview hidden"></div>
+
+      <button class="btn primary" id="btnDownload">Start download</button>
+
+      <div class="explain">
+        <h2>How the Arabic subtitle is chosen</h2>
+        <ol class="chain">
+          <li><strong>Human-made Arabic subtitle</strong><span>If the uploader published one, it's used as-is — nothing beats it.</span></li>
+          <li><strong>Gemini translation</strong><span>Reads the whole English subtitle file at once, so sentences stay connected instead of being translated cue-by-cue.</span></li>
+          <li><strong>YouTube's auto-translation</strong><span>Used if Gemini is unavailable or its free limit is reached.</span></li>
+          <li><strong>Google Translate</strong><span>Always-free final fallback, so a translation always lands.</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- Resume -->
+    <section class="panel" id="tab-resume">
+      <div class="row between">
+        <p class="hint">Playlists with saved progress — pick up exactly where you stopped.</p>
+        <button class="btn ghost" id="btnRefreshResume">Refresh</button>
+      </div>
+      <div id="resumeList" class="cards"></div>
+    </section>
+
+    <!-- Transcript & X -->
+    <section class="panel" id="tab-extract">
+      <label class="field">
+        <span>YouTube video, or Twitter/X post URL</span>
+        <input type="text" id="exUrl" placeholder="https://…" />
+      </label>
+      <div class="row">
+        <button class="btn primary" id="btnTranscript">Extract transcript</button>
+        <button class="btn" id="btnTweet">Extract X thread</button>
+      </div>
+      <p class="hint">Transcripts are saved as plain text, split by chapters — ready to paste into an LLM.</p>
+    </section>
+
+    <!-- Instagram -->
+    <section class="panel" id="tab-instagram">
+      <label class="field">
+        <span>Reel URLs — one per line</span>
+        <textarea id="igUrls" rows="6" placeholder="https://www.instagram.com/reel/…"></textarea>
+      </label>
+      <button class="btn primary" id="btnInstagram">Download reels</button>
+    </section>
+
+    <!-- Subtitles -->
+    <section class="panel" id="tab-subs">
+      <div class="row">
+        <label class="field grow">
+          <span>Search downloaded videos</span>
+          <input type="text" id="subQuery" placeholder="Type part of a title…" />
+        </label>
+        <button class="btn ghost" id="btnSearchSubs">Search</button>
+      </div>
+      <p class="hint">Fetch a missing Arabic subtitle without re-downloading the video.</p>
+      <div id="subsList" class="cards"></div>
+    </section>
+  </main>
+
+  <aside class="console">
+    <div class="console-head">
+      <span class="console-title">Activity</span>
+      <span class="progress-label" id="progressLabel">Idle</span>
+    </div>
+    <div class="progress"><div class="bar" id="progressBar"></div></div>
+    <div class="log" id="log"></div>
+    <div class="console-foot" id="downloadDir"></div>
+  </aside>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Web UI (localhost:8000)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["webapp.server:app", "--host", "127.0.0.1", "--port", "8000", "--reload"],
+      "cwd": "${workspaceFolder}",
+      "jinja": true,
+      "console": "integratedTerminal",
+      "serverReadyAction": {
+        "pattern": "Uvicorn running on https?://([0-9.]+):([0-9]+)",
+        "uriFormat": "http://127.0.0.1:8000",
+        "action": "openExternally"
+      }
+    },
+    {
+      "name": "CLI",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/cli.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ]
+}

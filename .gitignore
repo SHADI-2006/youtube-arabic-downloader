@@ -9,8 +9,11 @@ __pycache__/
 venv/
 *.egg-info/
 
-# Editors — settings.json has a machine-specific interpreter path, kept local only
-.vscode/
+# Editors — launch.json is portable and shared; settings.json holds a
+# machine-specific interpreter path, so it stays local
+.vscode/*
+!.vscode/launch.json
+.claude/
 
 # OS
 Thumbs.db

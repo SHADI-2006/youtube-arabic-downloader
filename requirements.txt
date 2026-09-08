@@ -1,5 +1,7 @@
 yt-dlp>=2026.8.19
 deep-translator>=1.11.4
 google-genai>=2.22.0
+python-dotenv>=1.0.0
 rich>=15.0.0
-customtkinter>=6.0.0
+fastapi>=0.141.0
+uvicorn[standard]>=0.52.0
