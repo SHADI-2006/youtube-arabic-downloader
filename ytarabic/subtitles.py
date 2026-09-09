@@ -321,7 +321,8 @@ def _gemini_translate_chunk(client, chunk_text: str, chunk_cue_count: int,
 #  Translation engine 2 — Gemini (free tier, priority, best context)
 # ─────────────────────────────────────────────
 def translate_srt_to_arabic_gemini(src: Path, log: LogFn = _default_log,
-                                    should_stop: Optional[Callable[[], bool]] = None) -> Optional[Path]:
+                                    should_stop: Optional[Callable[[], bool]] = None,
+                                    youtube_fallback: Optional[Callable[[], Optional[list]]] = None) -> Optional[Path]:
     """
     Translate an English .srt to Arabic with Gemini (free tier, via
     google-genai), in chunks of GEMINI_CUES_PER_REQUEST cues so a long
@@ -331,19 +332,30 @@ def translate_srt_to_arabic_gemini(src: Path, log: LogFn = _default_log,
     is retried once.
 
     A chunk that still fails after retries (e.g. the free tier's daily
-    quota runs out partway through a long video) falls back to Google
-    Translate for JUST that chunk instead of discarding every other
-    chunk's already-successful Gemini translation — a 10-hour course
-    can need a dozen-plus requests, and throwing away 11 good ones
-    because the 12th hit a quota wall would waste both the quota
-    already spent and the translation quality already gained. The
-    ".source" sidecar records the mix (e.g. "Gemini (11/12 parts) +
-    Google Translate (1 part)") so it's never silently misattributed.
+    quota runs out partway through a long video) is patched from
+    another source for JUST that chunk instead of discarding every
+    other chunk's already-successful Gemini translation — a 10-hour
+    course can need a dozen-plus requests, and throwing away 11 good
+    ones because the 12th hit a quota wall would waste both the quota
+    already spent and the translation quality already gained.
+
+    `youtube_fallback`, if given, is called at most once (lazily, only
+    if a chunk actually fails) and should return YouTube's own
+    auto-translated Arabic subtitle as a list of cue blocks aligned
+    with this file's, or None. When it lines up (same cue count as the
+    English source — otherwise a chunk's cue range can't be safely
+    mapped across the two files), it's preferred over Google Translate
+    for the failed chunk since YouTube's own translation is generally
+    the better of the two. Google Translate is the last resort when
+    that isn't available or doesn't line up. The ".source" sidecar
+    records exactly which engine produced which part, e.g. "Gemini
+    (11/12 parts) + YouTube auto-translate (1 part(s): 5)", so a mixed
+    result is never silently misattributed as pure Gemini.
 
     Returns None only if nothing could be produced at all (SDK missing,
-    GEMINI_API_KEY unset, or even the Google Translate fallback failed
-    for some chunk) — callers should then fall back to another engine
-    for the whole file.
+    GEMINI_API_KEY unset, or every fallback also failed for some
+    chunk) — callers should then fall back to another engine for the
+    whole file.
     """
     import os
     try:
@@ -367,7 +379,8 @@ def translate_srt_to_arabic_gemini(src: Path, log: LogFn = _default_log,
 
     client          = genai.Client()
     translated      = []
-    fallback_parts  = []
+    fallback_parts  = {}   # part number -> engine name, for the .source label
+    yt_blocks       = "not fetched yet"   # lazy, fetched at most once
     chunk_starts    = list(range(0, len(blocks), GEMINI_CUES_PER_REQUEST))
     total_chunks    = len(chunk_starts)
 
@@ -379,12 +392,23 @@ def translate_srt_to_arabic_gemini(src: Path, log: LogFn = _default_log,
         if total_chunks > 1:
             log(f"Translating with Gemini — part {i}/{total_chunks}...", "info")
         piece = _gemini_translate_chunk(client, chunk_text, chunk_text.count("-->"), log)
+
         if piece is None:
-            log(f"Part {i}/{total_chunks}: falling back to Google Translate for just this part...", "warn")
-            piece = _google_translate_srt_text(chunk_text, log)
-            if piece is None:
-                return None
-            fallback_parts.append(i)
+            if yt_blocks == "not fetched yet":
+                yt_blocks = youtube_fallback() if youtube_fallback else None
+            if yt_blocks is not None and len(yt_blocks) == len(blocks):
+                log(f"Part {i}/{total_chunks}: using YouTube's own Arabic translation "
+                    "for just this part...", "warn")
+                piece = "\n\n".join(yt_blocks[start:start + GEMINI_CUES_PER_REQUEST])
+                fallback_parts[i] = "YouTube auto-translate"
+            else:
+                log(f"Part {i}/{total_chunks}: falling back to Google Translate for "
+                    "just this part...", "warn")
+                piece = _google_translate_srt_text(chunk_text, log)
+                if piece is None:
+                    return None
+                fallback_parts[i] = "Google Translate"
+
         translated.append(piece)
 
     result = "\n\n".join(translated)
@@ -396,8 +420,13 @@ def translate_srt_to_arabic_gemini(src: Path, log: LogFn = _default_log,
 
     if fallback_parts:
         gemini_n = total_chunks - len(fallback_parts)
-        source = (f"Gemini ({gemini_n}/{total_chunks} parts) + "
-                  f"Google Translate ({len(fallback_parts)} part(s): {', '.join(map(str, fallback_parts))})")
+        by_engine = {}
+        for part, engine in fallback_parts.items():
+            by_engine.setdefault(engine, []).append(part)
+        pieces = [f"Gemini ({gemini_n}/{total_chunks} parts)"]
+        for engine, parts in by_engine.items():
+            pieces.append(f"{engine} ({len(parts)} part(s): {', '.join(map(str, sorted(parts)))})")
+        source = " + ".join(pieces)
     else:
         source = "Gemini"
     _mark_subtitle_source(dst, source)
@@ -488,6 +517,26 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log,
         subs = {f for f in output_dir.iterdir() if f.suffix in SUB_EXTS}
         return {f for f in subs if tag is None or tag in f.name}
 
+    def _fetch_youtube_translated_blocks(lang: str) -> Optional[list]:
+        """Download YouTube's own auto-translated Arabic subtitle and
+        parse it into cue blocks, for the Gemini per-chunk fallback."""
+        opts = build_subtitle_opts(output_dir, [lang])
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+        except Exception:
+            return None
+        fix_subtitle_bom(output_dir)
+        candidates = [f for f in _own_subs() if f.suffix == ".srt"
+                      and any(t in f.name.lower() for t in AR_TAGS)]
+        if not candidates:
+            return None
+        try:
+            raw = candidates[0].read_bytes().lstrip(UTF8_BOM).decode("utf-8", errors="replace")
+        except Exception:
+            return None
+        return [b for b in raw.strip().split("\n\n") if b.strip()]
+
     manual_lang, auto_lang = arabic_lang_options(url)
     _check_stop()
 
@@ -529,7 +578,8 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log,
     remaining = []
     for f in new_en_subs:
         _check_stop()
-        translated = translate_srt_to_arabic_gemini(f, log, should_stop)
+        yt_fallback = (lambda: _fetch_youtube_translated_blocks(auto_lang)) if auto_lang else None
+        translated = translate_srt_to_arabic_gemini(f, log, should_stop, yt_fallback)
         if translated:
             log(f"Arabic translation saved: {translated.name}", "success")
         else:
