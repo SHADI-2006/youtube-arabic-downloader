@@ -37,7 +37,7 @@ INSTAGRAM_COOKIES_FILE = os.environ.get("INSTAGRAM_COOKIES_FILE", "")
 
 # Gemini model used for auto-translation (see subtitles.py for the
 # full Arabic-subtitle priority chain)
-GEMINI_MODEL      = "gemini-3.8-flash"
+GEMINI_MODEL      = "gemini-3.6-flash"
 GEMINI_RETRIES    = 2    # extra attempts on transient server/connection errors
 GEMINI_RETRY_WAIT = 5    # seconds between those retries (never retries a 429)
 GEMINI_TIMEOUT    = 30   # seconds — without this, a stalled request hangs forever
