@@ -9,6 +9,13 @@ _YT_ID_RE = re.compile(
 )
 
 
+def extract_youtube_id(url: str) -> "str | None":
+    """The 11-char video id from any YouTube URL form, or None if url
+    isn't a recognizable YouTube link."""
+    m = _YT_ID_RE.search(url)
+    return m.group(1) if m else None
+
+
 def normalize_youtube_url(url: str) -> str:
     """Collapse different share-link variants of the same YouTube video
     (youtu.be/ID?si=..., youtube.com/watch?v=ID&si=..., /shorts/ID, ...)
@@ -16,8 +23,8 @@ def normalize_youtube_url(url: str) -> str:
     for a video already in progress creates a brand new pending/history
     entry instead of recognizing it as the same download, so Resume never
     finds it and each attempt restarts instead of continuing."""
-    m = _YT_ID_RE.search(url)
-    return f"https://www.youtube.com/watch?v={m.group(1)}" if m else url
+    vid = extract_youtube_id(url)
+    return f"https://www.youtube.com/watch?v={vid}" if vid else url
 
 
 def fmt_size(b: float) -> str:

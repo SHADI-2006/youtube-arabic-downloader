@@ -20,6 +20,7 @@ from .config import (
     HAS_FFMPEG, SUB_EXTS, SUBTITLES_EN, UTF8_BOM,
 )
 from .errors import Cancelled
+from .utils import extract_youtube_id
 from .youtube import base_opts, build_subtitle_opts
 
 LogFn = Callable[[str, str], None]
@@ -401,6 +402,18 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log,
         if should_stop and should_stop():
             raise Cancelled("stop requested")
 
+    # Single downloads all share one "single/" folder, so scanning the
+    # whole directory would pick up other videos' subtitle files too.
+    # Scope every lookup to this video's own [id] tag instead.
+    video_id = extract_youtube_id(url)
+    tag = f"[{video_id}]" if video_id else None
+
+    def _own_subs() -> set:
+        if not output_dir.exists():
+            return set()
+        subs = {f for f in output_dir.iterdir() if f.suffix in SUB_EXTS}
+        return {f for f in subs if tag is None or tag in f.name}
+
     manual_lang, auto_lang = arabic_lang_options(url)
     _check_stop()
 
@@ -413,16 +426,18 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log,
                 ydl.download([url])
         except Exception:
             pass
-        subs = {f for f in output_dir.iterdir() if f.suffix in SUB_EXTS}
+        subs = _own_subs()
         if has_arabic_subtitle(subs):
             fix_subtitle_bom(output_dir)
             _mark_subtitle_source(_find_arabic_subtitle(subs), "Manual (real Arabic subtitle on YouTube)")
             return
 
-    # 2) No manual Arabic — download English as the source to translate
+    # 2) No manual Arabic — download English as the source to translate.
+    # Looked up by this video's own tag afterwards (not a before/after
+    # diff) so a retry still finds it even if an English subtitle with
+    # the same filename was already sitting there from an earlier attempt.
     _check_stop()
     log("No manual Arabic sub — downloading English to translate...", "info")
-    before = {f for f in output_dir.iterdir() if f.suffix in SUB_EXTS} if output_dir.exists() else set()
     en_opts = build_subtitle_opts(output_dir, SUBTITLES_EN)
     try:
         with yt_dlp.YoutubeDL(en_opts) as ydl:
@@ -431,8 +446,7 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log,
         pass
     fix_subtitle_bom(output_dir)
 
-    after       = {f for f in output_dir.iterdir() if f.suffix in SUB_EXTS} if output_dir.exists() else set()
-    new_en_subs = {f for f in (after - before) if f.suffix == ".srt"}
+    new_en_subs = {f for f in _own_subs() if f.suffix == ".srt" and f.name.lower().endswith(".en.srt")}
     if not new_en_subs:
         return
 
@@ -462,7 +476,7 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log,
         except Exception:
             pass
         fix_subtitle_bom(output_dir)
-        subs = {f for f in output_dir.iterdir() if f.suffix in SUB_EXTS}
+        subs = _own_subs()
         if has_arabic_subtitle(subs):
             _mark_subtitle_source(_find_arabic_subtitle(subs), "YouTube auto-translate")
             return
