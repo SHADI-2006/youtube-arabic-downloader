@@ -136,21 +136,17 @@ TRANSLATE_CUES_PER_REQUEST = 25   # cues per Google Translate request
 _CUE_SEP = "\n|||\n"
 
 
-def translate_srt_to_arabic(src: Path, log: LogFn = _default_log) -> Optional[Path]:
-    """
-    Translate an English .srt to Arabic with Google Translate (free,
-    via deep-translator — no API key needed). Keeps index/timestamp
-    lines untouched, translates cue text only, in small batches.
-    """
+def _google_translate_srt_text(raw: str, log: LogFn = _default_log) -> Optional[str]:
+    """Translate raw SRT text to Arabic with Google Translate (free, via
+    deep-translator — no API key needed). Keeps index/timestamp lines
+    untouched, translates cue text only, in small batches. Works on text
+    directly (not a file) so it can also serve as a per-chunk fallback
+    when a single Gemini chunk fails without discarding a whole file's
+    worth of otherwise-successful Gemini translation."""
     try:
         from deep_translator import GoogleTranslator
     except ImportError:
         log("Translation skipped — run: pip install deep-translator", "warn")
-        return None
-
-    try:
-        raw = src.read_bytes().lstrip(UTF8_BOM).decode("utf-8", errors="replace")
-    except Exception:
         return None
 
     blocks = [b for b in raw.strip().split("\n\n") if b.strip()]
@@ -198,10 +194,25 @@ def translate_srt_to_arabic(src: Path, log: LogFn = _default_log) -> Optional[Pa
     for (header, original), new_text in zip(parsed, translated):
         out_blocks.append("\n".join(header + [new_text or original]) if original else "\n".join(header))
 
+    return "\n\n".join(out_blocks)
+
+
+def translate_srt_to_arabic(src: Path, log: LogFn = _default_log) -> Optional[Path]:
+    """Translate an English .srt file to Arabic with Google Translate —
+    see _google_translate_srt_text for the actual translation logic."""
+    try:
+        raw = src.read_bytes().lstrip(UTF8_BOM).decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+    result = _google_translate_srt_text(raw, log)
+    if result is None:
+        return None
+
     name     = src.name
     dst_name = name[:-7] + ".ar.srt" if name.lower().endswith(".en.srt") else src.stem + ".ar.srt"
     dst      = src.parent / dst_name
-    dst.write_bytes(UTF8_BOM + ("\n\n".join(out_blocks) + "\n").encode("utf-8"))
+    dst.write_bytes(UTF8_BOM + (result + "\n").encode("utf-8"))
     return dst
 
 
@@ -317,11 +328,22 @@ def translate_srt_to_arabic_gemini(src: Path, log: LogFn = _default_log,
     (multi-hour) video doesn't send one request too large to finish
     before it times out or gets truncated. Retries transient server/
     connection errors per chunk; a 429 with a short stated reset time
-    is retried once, a genuine quota exhaustion is reported clearly and
-    not retried. Returns None (any chunk failing aborts the whole file,
-    so the result is never a mix of Gemini and another engine) if the
-    SDK isn't installed, GEMINI_API_KEY isn't set, or any chunk's
-    translation fails — callers should fall back to another engine.
+    is retried once.
+
+    A chunk that still fails after retries (e.g. the free tier's daily
+    quota runs out partway through a long video) falls back to Google
+    Translate for JUST that chunk instead of discarding every other
+    chunk's already-successful Gemini translation — a 10-hour course
+    can need a dozen-plus requests, and throwing away 11 good ones
+    because the 12th hit a quota wall would waste both the quota
+    already spent and the translation quality already gained. The
+    ".source" sidecar records the mix (e.g. "Gemini (11/12 parts) +
+    Google Translate (1 part)") so it's never silently misattributed.
+
+    Returns None only if nothing could be produced at all (SDK missing,
+    GEMINI_API_KEY unset, or even the Google Translate fallback failed
+    for some chunk) — callers should then fall back to another engine
+    for the whole file.
     """
     import os
     try:
@@ -343,10 +365,11 @@ def translate_srt_to_arabic_gemini(src: Path, log: LogFn = _default_log,
     if not blocks:
         return None
 
-    client         = genai.Client()
-    translated     = []
-    chunk_starts   = list(range(0, len(blocks), GEMINI_CUES_PER_REQUEST))
-    total_chunks   = len(chunk_starts)
+    client          = genai.Client()
+    translated      = []
+    fallback_parts  = []
+    chunk_starts    = list(range(0, len(blocks), GEMINI_CUES_PER_REQUEST))
+    total_chunks    = len(chunk_starts)
 
     for i, start in enumerate(chunk_starts, 1):
         if should_stop and should_stop():
@@ -357,7 +380,11 @@ def translate_srt_to_arabic_gemini(src: Path, log: LogFn = _default_log,
             log(f"Translating with Gemini — part {i}/{total_chunks}...", "info")
         piece = _gemini_translate_chunk(client, chunk_text, chunk_text.count("-->"), log)
         if piece is None:
-            return None
+            log(f"Part {i}/{total_chunks}: falling back to Google Translate for just this part...", "warn")
+            piece = _google_translate_srt_text(chunk_text, log)
+            if piece is None:
+                return None
+            fallback_parts.append(i)
         translated.append(piece)
 
     result = "\n\n".join(translated)
@@ -366,6 +393,14 @@ def translate_srt_to_arabic_gemini(src: Path, log: LogFn = _default_log,
     dst_name = name[:-7] + ".ar.srt" if name.lower().endswith(".en.srt") else src.stem + ".ar.srt"
     dst      = src.parent / dst_name
     dst.write_bytes(UTF8_BOM + (result + "\n").encode("utf-8"))
+
+    if fallback_parts:
+        gemini_n = total_chunks - len(fallback_parts)
+        source = (f"Gemini ({gemini_n}/{total_chunks} parts) + "
+                  f"Google Translate ({len(fallback_parts)} part(s): {', '.join(map(str, fallback_parts))})")
+    else:
+        source = "Gemini"
+    _mark_subtitle_source(dst, source)
     return dst
 
 
@@ -496,8 +531,7 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log,
         _check_stop()
         translated = translate_srt_to_arabic_gemini(f, log, should_stop)
         if translated:
-            log(f"Arabic translation saved (Gemini): {translated.name}", "success")
-            _mark_subtitle_source(translated, "Gemini")
+            log(f"Arabic translation saved: {translated.name}", "success")
         else:
             remaining.append(f)
     if not remaining:
