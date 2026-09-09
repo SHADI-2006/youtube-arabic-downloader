@@ -232,6 +232,53 @@ textarea { resize: vertical; font-family: Consolas, ui-monospace, monospace; fon
 .status-dot.failed { color: var(--red); }
 .status-dot.cancelled { color: var(--yellow); }
 
+.card-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+.icon-btn {
+  padding: 8px 10px;
+  line-height: 1;
+  text-decoration: none;
+  display: inline-flex;
+}
+
+/* Resume cards can grow downward (expandable video list), unlike plain .card */
+.resume-card {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+}
+.resume-card .card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 15px;
+}
+
+.playlist-videos {
+  max-height: 260px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.video-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 15px;
+  font-size: 12.5px;
+  border-bottom: 1px solid #1b2230;
+}
+.video-row:last-child { border-bottom: none; }
+.video-index { color: #4d5866; min-width: 22px; text-align: right; flex-shrink: 0; }
+.video-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── explainer ── */
 .explain {
   margin-top: 30px;

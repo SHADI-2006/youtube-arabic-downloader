@@ -55,20 +55,18 @@
       <button class="btn primary" id="btnDownload">Start download</button>
 
       <div class="explain">
-        <h2>How the Arabic subtitle is chosen</h2>
-        <ol class="chain">
-          <li><strong>Human-made Arabic subtitle</strong><span>If the uploader published one, it's used as-is — nothing beats it.</span></li>
-          <li><strong>Gemini translation</strong><span>Reads the whole English subtitle file at once, so sentences stay connected instead of being translated cue-by-cue.</span></li>
-          <li><strong>YouTube's auto-translation</strong><span>Used if Gemini is unavailable or its free limit is reached.</span></li>
-          <li><strong>Google Translate</strong><span>Always-free final fallback, so a translation always lands.</span></li>
-        </ol>
+        <div class="row between" style="margin-bottom:10px">
+          <h2 style="margin:0">Recent activity</h2>
+          <p class="hint" style="margin:0">Arabic priority: human → Gemini → YouTube auto → Google Translate</p>
+        </div>
+        <div id="recentList" class="cards"></div>
       </div>
     </section>
 
     <!-- Resume -->
     <section class="panel" id="tab-resume">
       <div class="row between">
-        <p class="hint">Playlists with saved progress — pick up exactly where you stopped.</p>
+        <p class="hint">Playlists and videos that didn't finish — pick up exactly where you stopped.</p>
         <button class="btn ghost" id="btnRefreshResume">Refresh</button>
       </div>
       <div id="resumeList" class="cards"></div>

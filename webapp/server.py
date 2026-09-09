@@ -21,7 +21,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ytarabic import config, social, subtitles, transcript, youtube
 from ytarabic.errors import Cancelled
-from ytarabic.progress_store import load_history, load_progress, log_history
+from ytarabic.progress_store import (
+    clear_single_pending, load_history, load_pending, load_progress,
+    log_history, mark_single_pending,
+)
 from ytarabic.utils import fmt_size
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -185,7 +188,7 @@ def start_download(req: DownloadRequest):
             info = youtube.read_playlist_info(req.url, log=jobs.log)
             if not info:
                 jobs.log("Could not read playlist.", "error")
-                log_history("playlist", req.url, "failed", "could not read playlist")
+                log_history("playlist", req.url, req.url, "failed", "could not read playlist")
                 return
             entries = [e for e in info.get("entries", []) if e]
             title = info.get("title", "playlist")
@@ -203,24 +206,18 @@ def start_download(req: DownloadRequest):
                 jobs.log(f"Finished — saved to {result['output_dir'].resolve()}", "success")
                 if result["failed"]:
                     jobs.log(f"Failed ({len(result['failed'])}): " + ", ".join(result["failed"][:5]), "warn")
-            log_history("playlist", title, status,
+            log_history("playlist", req.url, title, status,
                         f"{result['done']} downloaded, {len(result['failed'])} failed")
         else:
-            try:
-                out = youtube.download_single(
-                    req.url, req.quality, log=jobs.log, on_video_progress=jobs.video_hook,
-                    should_stop=jobs.should_stop,
-                )
-            except Cancelled:
-                jobs.log("Stopped by user.", "warn")
-                out = None
-            if out:
-                log_history("video", out["title"], "success", req.quality)
-                if req.with_transcript and req.quality != "6":
-                    transcript.extract_transcript(req.url, log=jobs.log)
-            else:
-                status = "cancelled" if jobs.should_stop() else "failed"
-                log_history("video", req.url, status, req.quality)
+            out = youtube.download_single(
+                req.url, req.quality, log=jobs.log, on_video_progress=jobs.video_hook,
+                should_stop=jobs.should_stop,
+            )
+            log_history("video", req.url, out["title"],
+                        "cancelled" if out["cancelled"] else ("success" if out["success"] else "failed"),
+                        req.quality)
+            if out["success"] and req.with_transcript and req.quality != "6":
+                transcript.extract_transcript(req.url, log=jobs.log)
 
     if not jobs.start("download", task):
         return {"ok": False, "error": "A job is already running"}
@@ -231,7 +228,7 @@ def start_download(req: DownloadRequest):
 def start_transcript(req: UrlRequest):
     def task():
         out = transcript.extract_transcript(req.url, log=jobs.log)
-        log_history("transcript", out.stem if out else req.url, "success" if out else "failed")
+        log_history("transcript", req.url, out.stem if out else req.url, "success" if out else "failed")
 
     if not jobs.start("transcript", task):
         return {"ok": False, "error": "A job is already running"}
@@ -242,7 +239,7 @@ def start_transcript(req: UrlRequest):
 def start_tweet(req: UrlRequest):
     def task():
         out = social.extract_tweet(req.url, log=jobs.log)
-        log_history("tweet", out.name if out else req.url, "success" if out else "failed")
+        log_history("tweet", req.url, out.name if out else req.url, "success" if out else "failed")
 
     if not jobs.start("tweet", task):
         return {"ok": False, "error": "A job is already running"}
@@ -264,7 +261,7 @@ def start_instagram(req: UrlsRequest):
                 "success",
             )
         status = "cancelled" if result["stopped"] else ("failed" if not result["ok"] else "success")
-        log_history("instagram", f"{result['ok']}/{result['total']} reels", status)
+        log_history("instagram", "|".join(req.urls), f"{result['ok']}/{result['total']} reels", status)
 
     if not jobs.start("instagram", task):
         return {"ok": False, "error": "A job is already running"}
@@ -309,7 +306,7 @@ def fetch_subtitle(req: SubtitleRequest):
             jobs.log("Done — Arabic subtitle saved.", "success")
         else:
             jobs.log("Still no Arabic subtitle available for this video.", "warn")
-        log_history("subtitle", req.video_id, "success" if found else "failed")
+        log_history("subtitle", url, req.video_id, "success" if found else "failed")
 
     if not jobs.start("subtitle", task):
         return {"ok": False, "error": "A job is already running"}
@@ -318,20 +315,35 @@ def fetch_subtitle(req: SubtitleRequest):
 
 @app.get("/api/saved-progress")
 def saved_progress():
-    out = []
+    """Everything with room to resume: playlists with incomplete items,
+    and single videos that started but never finished (stopped, or the
+    app closed mid-download)."""
+    playlists = []
     for url, data in load_progress().items():
         done = data.get("done", [])
         if not done:
             continue
         key = done[0].rsplit("_", 1)[-1] if "_" in done[0] else "2"
-        out.append({
+        playlists.append({
+            "type": "playlist",
             "url": url,
             "done": len(done),
             "quality": key,
             "quality_label": config.QUALITY_OPTIONS.get(key, ("?",))[0],
             "recent": list(data.get("titles", {}).values())[-3:],
         })
-    return {"playlists": out}
+
+    singles = []
+    for url, data in load_pending().items():
+        singles.append({
+            "type": "single",
+            "url": url,
+            "title": data.get("title", url),
+            "quality": data.get("quality", "2"),
+            "quality_label": config.QUALITY_OPTIONS.get(data.get("quality", "2"), ("?",))[0],
+        })
+
+    return {"playlists": playlists, "singles": singles}
 
 
 @app.post("/api/resume")
@@ -344,7 +356,7 @@ def resume(req: UrlRequest):
         info = youtube.read_playlist_info(req.url, log=jobs.log)
         if not info:
             jobs.log("Could not re-read playlist.", "error")
-            log_history("playlist", req.url, "failed", "could not re-read playlist")
+            log_history("playlist", req.url, req.url, "failed", "could not re-read playlist")
             return
         entries = [e for e in info.get("entries", []) if e]
         title = info.get("title", "playlist")
@@ -352,19 +364,59 @@ def resume(req: UrlRequest):
             req.url, key, entries, title,
             log=jobs.log, on_video_progress=jobs.video_hook,
             on_item_start=lambda i, n, t: jobs.emit("item", index=i, total=n, title=t),
-            should_stop=jobs.should_stop,
+            should_stop=jobs.should_stop, is_resume=True,
         )
         status = "cancelled" if result["stopped"] else ("failed" if result["failed"] and not result["done"] else "success")
         if result["stopped"]:
             jobs.log(f"Stopped — {result['done']} downloaded before stopping.", "warn")
         else:
             jobs.log(f"Finished — saved to {result['output_dir'].resolve()}", "success")
-        log_history("playlist", title, status,
+        log_history("playlist", req.url, title, status,
                     f"{result['done']} downloaded, {len(result['failed'])} failed")
 
     if not jobs.start("resume", task):
         return {"ok": False, "error": "A job is already running"}
     return {"ok": True}
+
+
+@app.post("/api/resume-single")
+def resume_single(req: UrlRequest):
+    pending = load_pending().get(req.url)
+    if not pending:
+        return {"ok": False, "error": "Not a pending download"}
+
+    def task():
+        out = youtube.download_single(
+            req.url, pending["quality"], log=jobs.log, on_video_progress=jobs.video_hook,
+            should_stop=jobs.should_stop, is_resume=True,
+        )
+        log_history("video", req.url, out["title"],
+                    "cancelled" if out["cancelled"] else ("success" if out["success"] else "failed"),
+                    pending["quality"])
+
+    if not jobs.start("resume", task):
+        return {"ok": False, "error": "A job is already running"}
+    return {"ok": True}
+
+
+@app.get("/api/playlist-detail")
+def playlist_detail(url: str, quality: str = "2"):
+    """Every video in the playlist, in order, with its downloaded state
+    at `quality` — for expanding a Resume card into a per-video list."""
+    info = youtube.read_playlist_info(url, log=jobs.log)
+    if not info:
+        return {"ok": False, "error": "Could not read playlist"}
+    entries = [e for e in info.get("entries", []) if e]
+    done = set(load_progress().get(url, {}).get("done", []))
+    videos = [
+        {
+            "video_id": e.get("id", ""),
+            "title": e.get("title", ""),
+            "downloaded": f"{e.get('id')}_{quality}" in done,
+        }
+        for e in entries
+    ]
+    return {"ok": True, "title": info.get("title", "playlist"), "videos": videos}
 
 
 @app.get("/api/history")

@@ -96,8 +96,25 @@ def build_instagram_opts(output_dir: Path, progress_hook: Optional[Callable] = N
 # ─────────────────────────────────────────────
 #  Size estimation
 # ─────────────────────────────────────────────
+def _format_bytes(f: dict, duration: float) -> tuple:
+    """
+    (bytes, is_exact) for one format. YouTube frequently omits filesize
+    for high-bitrate DASH streams (seen even on 1080p VP9) even though
+    tbr (bitrate) is still reported — in that case estimate from
+    tbr * duration instead of treating the format as sizeless.
+    """
+    size = f.get("filesize") or f.get("filesize_approx") or 0
+    if size:
+        return size, True
+    tbr = f.get("tbr")
+    if tbr and duration:
+        return int(tbr * 1000 / 8 * duration), False
+    return 0, False
+
+
 def get_all_sizes(url: str) -> dict:
-    """Estimated size per quality option, in one request. '?' if unknown."""
+    """Estimated size per quality option, in one request. '?' if unknown,
+    prefixed with '~' when estimated from bitrate rather than a reported filesize."""
     from .utils import fmt_size
     default = {k: "?" for k in QUALITY_OPTIONS}
     try:
@@ -106,14 +123,14 @@ def get_all_sizes(url: str) -> dict:
         if not info:
             return default
 
-        formats = info.get("formats", [])
+        duration = info.get("duration") or 0
+        formats  = info.get("formats", [])
         audio_fmts = [f for f in formats
                       if f.get("acodec") != "none" and f.get("vcodec") == "none"]
-        audio_size = 0
+        audio_size, audio_exact = 0, True
         if audio_fmts:
-            best_a = max(audio_fmts,
-                         key=lambda f: (f.get("filesize") or f.get("filesize_approx") or 0))
-            audio_size = best_a.get("filesize") or best_a.get("filesize_approx") or 0
+            best_a = max(audio_fmts, key=lambda f: _format_bytes(f, duration)[0])
+            audio_size, audio_exact = _format_bytes(best_a, duration)
 
         heights = {"1": 2160, "2": 1080, "3": 720, "4": 480, "5": 360}
         sizes: dict = {}
@@ -123,33 +140,38 @@ def get_all_sizes(url: str) -> dict:
                      and f.get("vcodec") != "none"]
             if cands:
                 best_v = max(cands, key=lambda f: (f.get("height", 0), f.get("tbr", 0)))
-                v_size = best_v.get("filesize") or best_v.get("filesize_approx") or 0
-                total  = (v_size + audio_size) if HAS_FFMPEG else v_size
-                sizes[key] = fmt_size(total) if total else "?"
+                v_size, v_exact = _format_bytes(best_v, duration)
+                if v_size:
+                    total = (v_size + audio_size) if HAS_FFMPEG else v_size
+                    prefix = "" if (v_exact and audio_exact) else "~"
+                    sizes[key] = prefix + fmt_size(total)
+                else:
+                    sizes[key] = "?"
             else:
                 sizes[key] = "?"
-        sizes["6"] = fmt_size(audio_size) if audio_size else "?"
+        sizes["6"] = ("" if audio_exact else "~") + fmt_size(audio_size) if audio_size else "?"
         return sizes
     except Exception:
         return default
 
 
 def get_video_size(video_id: str, choice_key: str) -> int:
-    """Estimated bytes for one video at given quality. 0 if unknown."""
+    """Estimated bytes for one video at given quality (bitrate-based
+    estimate if YouTube didn't report a filesize). 0 if unknown."""
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:
         with yt_dlp.YoutubeDL(base_opts()) as ydl:
             info = ydl.extract_info(url, download=False)
         if not info:
             return 0
-        formats = info.get("formats", [])
+        duration = info.get("duration") or 0
+        formats  = info.get("formats", [])
         audio_fmts = [f for f in formats
                       if f.get("acodec") != "none" and f.get("vcodec") == "none"]
         audio_size = 0
         if audio_fmts:
-            best_a = max(audio_fmts,
-                         key=lambda f: (f.get("filesize") or f.get("filesize_approx") or 0))
-            audio_size = best_a.get("filesize") or best_a.get("filesize_approx") or 0
+            best_a = max(audio_fmts, key=lambda f: _format_bytes(f, duration)[0])
+            audio_size = _format_bytes(best_a, duration)[0]
         if choice_key == "6":
             return audio_size
         max_h = {"1": 2160, "2": 1080, "3": 720, "4": 480, "5": 360}.get(choice_key, 1080)
@@ -159,7 +181,9 @@ def get_video_size(video_id: str, choice_key: str) -> int:
         if not cands:
             return 0
         best_v = max(cands, key=lambda f: (f.get("height", 0), f.get("tbr", 0)))
-        v_size = best_v.get("filesize") or best_v.get("filesize_approx") or 0
+        v_size = _format_bytes(best_v, duration)[0]
+        if not v_size:
+            return 0   # unknown video size — don't silently return audio-only size
         return (v_size + audio_size) if HAS_FFMPEG else v_size
     except Exception:
         return 0
@@ -195,7 +219,10 @@ def get_playlist_total_size(entries: list, choice_key: str,
 #  Cleanup + download-with-retry
 # ─────────────────────────────────────────────
 def delete_old_versions(directory: Path, video_id: str, log: LogFn = _default_log):
-    """Remove old video+subtitle files for this video_id before re-downloading."""
+    """Remove old video+subtitle files for this video_id before re-downloading
+    from scratch. Do NOT call this when resuming the same in-progress
+    download — it would delete the partial file yt-dlp could otherwise
+    continue via HTTP range requests."""
     if not directory.exists():
         return
     tag = f"[{video_id}]"
@@ -264,10 +291,20 @@ def download_with_retry(url: str, opts: dict, output_dir: Path,
 # ─────────────────────────────────────────────
 def download_single(url: str, quality_key: str, log: LogFn = _default_log,
                      on_video_progress: Optional[Callable] = None,
-                     should_stop: Optional[Callable[[], bool]] = None) -> Optional[dict]:
-    """Downloads one video to DOWNLOAD_DIR/single. Returns
-    {"output_dir": Path, "title": str} on success, None on failure or
-    if stopped by the user."""
+                     should_stop: Optional[Callable[[], bool]] = None,
+                     is_resume: bool = False) -> dict:
+    """
+    Downloads one video to DOWNLOAD_DIR/single. Always returns a dict —
+    {"success": bool, "cancelled": bool, "output_dir": Path|None, "title": str}
+    — so callers (e.g. history logging) have the real title even on
+    failure/cancellation, not just on success.
+
+    Tracked as "pending" (progress_store) from the moment it starts until
+    it succeeds, so it shows up in Resume if stopped or interrupted.
+    is_resume=True skips the old-file cleanup so yt-dlp can continue a
+    partially-downloaded file instead of restarting from 0.
+    """
+    from .progress_store import clear_single_pending, mark_single_pending
     from .subtitles import fetch_subtitles
 
     audio_only = quality_key == "6"
@@ -276,16 +313,19 @@ def download_single(url: str, quality_key: str, log: LogFn = _default_log,
     output_dir.mkdir(parents=True, exist_ok=True)
     opts = build_ydl_opts(output_dir, fmt, audio_only, progress_hook=on_video_progress)
 
-    title = url
+    title, vid_id = url, ""
     try:
         with yt_dlp.YoutubeDL(base_opts()) as ydl:
             info = ydl.extract_info(url, download=False)
             vid_id = info.get("id", "") if info else ""
             title  = info.get("title", url) if info else url
-            if vid_id:
-                delete_old_versions(output_dir, vid_id, log)
     except Exception:
         pass
+
+    if not is_resume and vid_id:
+        delete_old_versions(output_dir, vid_id, log)
+
+    mark_single_pending(url, quality_key, title)
 
     log("Downloading...", "info")
     try:
@@ -295,11 +335,13 @@ def download_single(url: str, quality_key: str, log: LogFn = _default_log,
         )
     except Cancelled:
         log("Stopped by user.", "warn")
-        return None
+        return {"success": False, "cancelled": True, "output_dir": None, "title": title}
+
     if ok:
+        clear_single_pending(url)
         log(f"Saved to: {output_dir.resolve()}", "success")
-        return {"output_dir": output_dir, "title": title}
-    return None
+        return {"success": True, "cancelled": False, "output_dir": output_dir, "title": title}
+    return {"success": False, "cancelled": False, "output_dir": None, "title": title}
 
 
 # ─────────────────────────────────────────────
@@ -327,7 +369,8 @@ def download_playlist(url: str, quality_key: str, entries: list,
                        playlist_title: str, log: LogFn = _default_log,
                        on_video_progress: Optional[Callable] = None,
                        on_item_start: Optional[Callable[[int, int, str], None]] = None,
-                       should_stop: Optional[Callable[[], bool]] = None) -> dict:
+                       should_stop: Optional[Callable[[], bool]] = None,
+                       is_resume: bool = False) -> dict:
     """
     Download every not-yet-completed video in `entries` (from
     read_playlist_info) at `quality_key`. Progress is tracked per
@@ -335,6 +378,10 @@ def download_playlist(url: str, quality_key: str, entries: list,
     If should_stop() returns True (checked between videos — a video
     already in flight is cancelled instead, via on_video_progress
     raising Cancelled), the loop ends early and stopped=True is set.
+    is_resume=True skips the old-file cleanup for every item in this
+    run, so a video that was mid-download when previously stopped can
+    have its partial file continued instead of restarted from 0 — a
+    no-op for items with no partial file, so it's always safe to set.
     Returns a summary dict: output_dir, total, already_done, done, failed, stopped.
     """
     from .progress_store import load_progress, mark_done
@@ -370,7 +417,8 @@ def download_playlist(url: str, quality_key: str, entries: list,
         if on_item_start:
             on_item_start(idx, len(remaining), title)
 
-        delete_old_versions(output_dir, video_id, log)
+        if not is_resume:
+            delete_old_versions(output_dir, video_id, log)
         try:
             success = download_with_retry(
                 video_url, opts, output_dir, label=title, log=log,

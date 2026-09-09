@@ -61,6 +61,8 @@ function connect() {
       const activeTab = document.querySelector(".tab.active").dataset.tab;
       if (activeTab === "subs") searchSubs();
       if (activeTab === "history") loadHistory();
+      if (activeTab === "resume") loadResume();
+      if (activeTab === "download") loadRecent();
     }
   };
   ws.onclose = () => {
@@ -137,33 +139,112 @@ $("btnDownload").addEventListener("click", async () => {
   });
 });
 
+// ── shared helpers ────────────────────────────
+function firstUrl(u) {
+  return (u || "").split("|")[0];
+}
+function openLinkBtn(u) {
+  const link = firstUrl(u);
+  if (!link || !link.startsWith("http")) return "";
+  return `<a class="btn ghost icon-btn" href="${link}" target="_blank" rel="noopener" title="Open original link">🔗</a>`;
+}
+
 // ── resume ────────────────────────────────────
 async function loadResume() {
-  const { playlists } = await (await fetch("/api/saved-progress")).json();
+  const { playlists, singles } = await (await fetch("/api/saved-progress")).json();
   const box = $("resumeList");
-  if (!playlists.length) {
-    box.innerHTML = `<p class="empty">No saved playlist progress yet.</p>`;
+  if (!playlists.length && !singles.length) {
+    box.innerHTML = `<p class="empty">Nothing to resume — every download finished.</p>`;
     return;
   }
-  box.innerHTML = playlists
+
+  const singleCards = singles
     .map(
-      (p) => `
-      <div class="card">
-        <div class="card-main">
-          <div class="card-title">${p.recent[p.recent.length - 1] || p.url}</div>
-          <div class="card-sub">${p.done} done · ${p.quality_label} · ${p.url.slice(0, 60)}</div>
+      (s) => `
+      <div class="card resume-card">
+        <div class="card-row">
+          <div class="card-main">
+            <div class="card-title">🎬 ${s.title}</div>
+            <div class="card-sub">${s.quality_label} · stopped mid-download</div>
+          </div>
+          <div class="card-actions">
+            ${openLinkBtn(s.url)}
+            <button class="btn" data-resume-single="${encodeURIComponent(s.url)}">Resume</button>
+          </div>
         </div>
-        <button class="btn" data-resume="${encodeURIComponent(p.url)}">Resume</button>
       </div>`
     )
     .join("");
+
+  const playlistCards = playlists
+    .map((p, i) => {
+      const pid = `pv-${i}`;
+      return `
+      <div class="card resume-card">
+        <div class="card-row">
+          <div class="card-main">
+            <div class="card-title">📃 ${p.recent[p.recent.length - 1] || p.url}</div>
+            <div class="card-sub">${p.done} done · ${p.quality_label} · ${p.url.slice(0, 55)}</div>
+          </div>
+          <div class="card-actions">
+            ${openLinkBtn(p.url)}
+            <button class="btn ghost" data-expand="${pid}" data-url="${encodeURIComponent(p.url)}" data-quality="${p.quality}">Videos ▾</button>
+            <button class="btn" data-resume="${encodeURIComponent(p.url)}">Resume</button>
+          </div>
+        </div>
+        <div class="playlist-videos hidden" id="${pid}"></div>
+      </div>`;
+    })
+    .join("");
+
+  box.innerHTML = singleCards + playlistCards;
+
   box.querySelectorAll("[data-resume]").forEach((btn) =>
-    btn.addEventListener("click", () =>
-      post("/api/resume", { url: decodeURIComponent(btn.dataset.resume) })
-    )
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      post("/api/resume", { url: decodeURIComponent(btn.dataset.resume) });
+    })
+  );
+  box.querySelectorAll("[data-resume-single]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      post("/api/resume-single", { url: decodeURIComponent(btn.dataset.resumeSingle) });
+    })
+  );
+  box.querySelectorAll("[data-expand]").forEach((btn) =>
+    btn.addEventListener("click", () => togglePlaylistVideos(btn))
   );
 }
 $("btnRefreshResume").addEventListener("click", loadResume);
+
+async function togglePlaylistVideos(btn) {
+  const target = $(btn.dataset.expand);
+  if (!target.classList.contains("hidden")) {
+    target.classList.add("hidden");
+    btn.textContent = "Videos ▾";
+    return;
+  }
+  btn.textContent = "Loading…";
+  const url = decodeURIComponent(btn.dataset.url);
+  const q = encodeURIComponent(btn.dataset.quality);
+  const data = await (await fetch(`/api/playlist-detail?url=${encodeURIComponent(url)}&quality=${q}`)).json();
+  if (!data.ok) {
+    target.innerHTML = `<p class="empty">Could not load the video list.</p>`;
+  } else {
+    target.innerHTML = data.videos
+      .map(
+        (v, i) => `
+        <div class="video-row">
+          <span class="video-index">${i + 1}</span>
+          <span class="video-title">${v.title || v.video_id}</span>
+          <span class="badge ${v.downloaded ? "ok" : "missing"}">${v.downloaded ? "downloaded" : "not yet"}</span>
+        </div>`
+      )
+      .join("");
+  }
+  target.classList.remove("hidden");
+  btn.textContent = "Videos ▴";
+}
 
 // ── transcript / tweet ────────────────────────
 $("btnTranscript").addEventListener("click", () => {
@@ -247,9 +328,43 @@ async function loadHistory() {
           </div>
           <div class="card-sub">${when}${e.detail ? " · " + e.detail : ""}</div>
         </div>
-        <span class="status-dot ${e.status}" title="${e.status}">${STATUS_DOT[e.status] || "●"}</span>
+        <div class="card-actions">
+          ${openLinkBtn(e.url)}
+          <span class="status-dot ${e.status}" title="${e.status}">${STATUS_DOT[e.status] || "●"}</span>
+        </div>
       </div>`;
     })
     .join("");
 }
 $("btnRefreshHistory").addEventListener("click", loadHistory);
+
+// ── recent activity (Download tab) ────────────
+async function loadRecent() {
+  const { entries } = await (await fetch("/api/history")).json();
+  const box = $("recentList");
+  if (!box) return;
+  if (!entries.length) {
+    box.innerHTML = `<p class="empty">Nothing downloaded yet — your recent activity will show up here.</p>`;
+    return;
+  }
+  box.innerHTML = entries
+    .slice(0, 4)
+    .map((e) => {
+      const when = new Date(e.time).toLocaleString(undefined, {
+        month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+      });
+      return `
+      <div class="card">
+        <div class="card-main">
+          <div class="card-title">
+            <span class="kind-tag">${KIND_LABEL[e.kind] || e.kind}</span>
+            &nbsp;${e.title || "(untitled)"}
+          </div>
+          <div class="card-sub">${when}</div>
+        </div>
+        <span class="status-dot ${e.status}" title="${e.status}">${STATUS_DOT[e.status] || "●"}</span>
+      </div>`;
+    })
+    .join("");
+}
+loadRecent();
