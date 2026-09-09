@@ -227,52 +227,32 @@ def _gemini_retry_delay(e: Exception) -> Optional[float]:
     return float(m.group(1)) if m else None
 
 
-# ─────────────────────────────────────────────
-#  Translation engine 2 — Gemini (free tier, priority, best context)
-# ─────────────────────────────────────────────
-def translate_srt_to_arabic_gemini(src: Path, log: LogFn = _default_log) -> Optional[Path]:
-    """
-    Translate an English .srt to Arabic with Gemini (free tier, via
-    google-genai). Sends the whole file in ONE request so the model
-    reads full context and produces a naturally connected translation
-    instead of isolated per-cue text. Retries transient server/
-    connection errors; a 429 (request/quota limit) is reported clearly
-    and NOT retried. Returns None if the SDK isn't installed,
-    GEMINI_API_KEY isn't set, the limit was hit, or the response
-    looks incomplete — callers should fall back to another engine.
-    """
-    import os
-    try:
-        from google import genai
-    except ImportError:
-        log("Gemini translation skipped — run: pip install google-genai", "warn")
-        return None
+GEMINI_CUES_PER_REQUEST = 150   # A long course can run 10+ hours / thousands
+                                 # of cues — sending that as one request either
+                                 # times out or gets silently truncated by the
+                                 # model's own output-length ceiling. Chunking
+                                 # keeps every request's output small and fast
+                                 # regardless of the video's length, at the
+                                 # cost of full-file context across chunk
+                                 # boundaries (an acceptable tradeoff — still
+                                 # far more natural than per-cue translation).
 
-    if not os.environ.get("GEMINI_API_KEY"):
-        log("Gemini translation skipped — GEMINI_API_KEY not set", "warn")
-        return None
 
-    try:
-        raw = src.read_bytes().lstrip(UTF8_BOM).decode("utf-8", errors="replace")
-    except Exception:
-        return None
-
-    cue_count = raw.count("-->")
-    if cue_count == 0:
-        return None
-
+def _gemini_translate_chunk(client, chunk_text: str, chunk_cue_count: int,
+                             log: LogFn) -> Optional[str]:
+    """One chunked request, with the same 429/transient retry handling as
+    before. Returns the translated SRT excerpt, or None to fall back."""
     prompt = (
-        "Translate this SRT subtitle file from English to Arabic.\n"
+        "Translate this SRT subtitle excerpt from English to Arabic.\n"
         "Rules:\n"
         "- Keep every cue number and timestamp line EXACTLY unchanged.\n"
         "- Translate only the subtitle text lines.\n"
-        "- Read the whole file for context so the translation reads as one "
+        "- Read the whole excerpt for context so the translation reads as one "
         "connected, natural passage across cues — not word-for-word in isolation.\n"
-        "- Output ONLY the resulting SRT file. No explanation, no code fences.\n\n"
-        f"{raw}"
+        "- Output ONLY the resulting SRT excerpt. No explanation, no code fences.\n\n"
+        f"{chunk_text}"
     )
 
-    client = genai.Client()
     result = None
     for attempt in range(1, GEMINI_RETRIES + 2):
         try:
@@ -319,9 +299,68 @@ def translate_srt_to_arabic_gemini(src: Path, log: LogFn = _default_log) -> Opti
             result = result.rstrip()[:-3]
         result = result.strip()
 
-    if result.count("-->") < cue_count * 0.9:
+    if result.count("-->") < chunk_cue_count * 0.9:
         log("Gemini output looked incomplete — falling back", "warn")
         return None
+
+    return result
+
+
+# ─────────────────────────────────────────────
+#  Translation engine 2 — Gemini (free tier, priority, best context)
+# ─────────────────────────────────────────────
+def translate_srt_to_arabic_gemini(src: Path, log: LogFn = _default_log,
+                                    should_stop: Optional[Callable[[], bool]] = None) -> Optional[Path]:
+    """
+    Translate an English .srt to Arabic with Gemini (free tier, via
+    google-genai), in chunks of GEMINI_CUES_PER_REQUEST cues so a long
+    (multi-hour) video doesn't send one request too large to finish
+    before it times out or gets truncated. Retries transient server/
+    connection errors per chunk; a 429 with a short stated reset time
+    is retried once, a genuine quota exhaustion is reported clearly and
+    not retried. Returns None (any chunk failing aborts the whole file,
+    so the result is never a mix of Gemini and another engine) if the
+    SDK isn't installed, GEMINI_API_KEY isn't set, or any chunk's
+    translation fails — callers should fall back to another engine.
+    """
+    import os
+    try:
+        from google import genai
+    except ImportError:
+        log("Gemini translation skipped — run: pip install google-genai", "warn")
+        return None
+
+    if not os.environ.get("GEMINI_API_KEY"):
+        log("Gemini translation skipped — GEMINI_API_KEY not set", "warn")
+        return None
+
+    try:
+        raw = src.read_bytes().lstrip(UTF8_BOM).decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+    blocks = [b for b in raw.strip().split("\n\n") if b.strip()]
+    if not blocks:
+        return None
+
+    client         = genai.Client()
+    translated     = []
+    chunk_starts   = list(range(0, len(blocks), GEMINI_CUES_PER_REQUEST))
+    total_chunks   = len(chunk_starts)
+
+    for i, start in enumerate(chunk_starts, 1):
+        if should_stop and should_stop():
+            raise Cancelled("stop requested")
+        chunk_blocks = blocks[start:start + GEMINI_CUES_PER_REQUEST]
+        chunk_text   = "\n\n".join(chunk_blocks)
+        if total_chunks > 1:
+            log(f"Translating with Gemini — part {i}/{total_chunks}...", "info")
+        piece = _gemini_translate_chunk(client, chunk_text, chunk_text.count("-->"), log)
+        if piece is None:
+            return None
+        translated.append(piece)
+
+    result = "\n\n".join(translated)
 
     name     = src.name
     dst_name = name[:-7] + ".ar.srt" if name.lower().endswith(".en.srt") else src.stem + ".ar.srt"
@@ -455,7 +494,7 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log,
     remaining = []
     for f in new_en_subs:
         _check_stop()
-        translated = translate_srt_to_arabic_gemini(f, log)
+        translated = translate_srt_to_arabic_gemini(f, log, should_stop)
         if translated:
             log(f"Arabic translation saved (Gemini): {translated.name}", "success")
             _mark_subtitle_source(translated, "Gemini")

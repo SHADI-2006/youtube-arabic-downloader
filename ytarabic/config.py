@@ -40,9 +40,12 @@ INSTAGRAM_COOKIES_FILE = os.environ.get("INSTAGRAM_COOKIES_FILE", "")
 GEMINI_MODEL      = "gemini-3.6-flash"
 GEMINI_RETRIES    = 2    # extra attempts on transient server/connection errors
 GEMINI_RETRY_WAIT = 5    # seconds between those retries (never retries a 429)
-GEMINI_TIMEOUT    = 30   # seconds — without this, a stalled request hangs forever
+GEMINI_TIMEOUT    = 90   # seconds — without this, a stalled request hangs forever
                           # (no retry, no way to Stop it — it's not a checkpoint yt-dlp
-                          # or our should_stop() callback ever gets a chance to hit)
+                          # or our should_stop() callback ever gets a chance to hit).
+                          # A 150-cue chunk measured ~33s under light load but 60-90s+
+                          # under heavier account contention, so 30s was timing out on
+                          # essentially every request — 90s gives real margin.
 
 # ── Runtime constants ──
 HAS_FFMPEG = shutil.which("ffmpeg") is not None
