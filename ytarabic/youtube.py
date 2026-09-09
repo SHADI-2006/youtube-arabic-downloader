@@ -20,6 +20,21 @@ def _default_log(msg: str, level: str = "info") -> None:
     print(msg)
 
 
+def _quality_label(quality_key: str) -> str:
+    return QUALITY_OPTIONS.get(quality_key, (quality_key,))[0]
+
+
+def _find_video_file(directory: Path, video_id: str) -> Optional[Path]:
+    """Locate the downloaded video file for video_id in directory."""
+    if not directory.exists():
+        return None
+    tag = f"[{video_id}]"
+    for f in directory.iterdir():
+        if tag in f.name and f.suffix.lower() in VALID_VIDEO_EXTS:
+            return f
+    return None
+
+
 def base_opts(cookies_path: str = None) -> dict:
     """Common yt-dlp options including cookies."""
     cookies_path = COOKIES_FILE if cookies_path is None else cookies_path
@@ -304,11 +319,14 @@ def download_single(url: str, quality_key: str, log: LogFn = _default_log,
     is_resume=True skips the old-file cleanup so yt-dlp can continue a
     partially-downloaded file instead of restarting from 0.
     """
-    from .progress_store import clear_single_pending, mark_single_pending
+    from .progress_store import (
+        clear_single_pending, find_completed_video, mark_single_pending, mark_video_done,
+    )
     from .subtitles import fetch_subtitles
 
     audio_only = quality_key == "6"
     fmt        = get_fmt(quality_key)
+    q_label    = _quality_label(quality_key)
     output_dir = DOWNLOAD_DIR / "single"
     output_dir.mkdir(parents=True, exist_ok=True)
     opts = build_ydl_opts(output_dir, fmt, audio_only, progress_hook=on_video_progress)
@@ -322,12 +340,18 @@ def download_single(url: str, quality_key: str, log: LogFn = _default_log,
     except Exception:
         pass
 
+    if vid_id:
+        existing = find_completed_video(vid_id, quality_key)
+        if existing:
+            log(f"Already have \"{title}\" at {q_label} — skipping.", "success")
+            return {"success": True, "cancelled": False, "output_dir": Path(existing).parent, "title": title}
+
     if not is_resume and vid_id:
         delete_old_versions(output_dir, vid_id, log)
 
     mark_single_pending(url, quality_key, title)
 
-    log("Downloading...", "info")
+    log(f"Downloading ({q_label})...", "info")
     try:
         ok = download_with_retry(
             url, opts, output_dir, label=url, log=log,
@@ -339,7 +363,10 @@ def download_single(url: str, quality_key: str, log: LogFn = _default_log,
 
     if ok:
         clear_single_pending(url)
-        log(f"Saved to: {output_dir.resolve()}", "success")
+        log(f"Saved to: {output_dir.resolve()}  ({q_label})", "success")
+        video_file = _find_video_file(output_dir, vid_id) if vid_id else None
+        if vid_id and video_file:
+            mark_video_done(vid_id, quality_key, title, str(video_file))
         return {"success": True, "cancelled": False, "output_dir": output_dir, "title": title}
     return {"success": False, "cancelled": False, "output_dir": None, "title": title}
 
@@ -384,7 +411,7 @@ def download_playlist(url: str, quality_key: str, entries: list,
     no-op for items with no partial file, so it's always safe to set.
     Returns a summary dict: output_dir, total, already_done, done, failed, stopped.
     """
-    from .progress_store import load_progress, mark_done
+    from .progress_store import find_completed_video, load_progress, mark_done, mark_video_done
     from .subtitles import fetch_subtitles
     from .utils import safe_dir_name
 
@@ -394,6 +421,7 @@ def download_playlist(url: str, quality_key: str, entries: list,
 
     audio_only = quality_key == "6"
     fmt        = get_fmt(quality_key)
+    q_label    = _quality_label(quality_key)
 
     done_list = progress.get(url, {}).get("done", [])
     remaining = [e for e in entries if f"{e.get('id')}_{quality_key}" not in done_list]
@@ -417,6 +445,15 @@ def download_playlist(url: str, quality_key: str, entries: list,
         if on_item_start:
             on_item_start(idx, len(remaining), title)
 
+        # Already downloaded at this exact quality — standalone or in
+        # another playlist — no need to fetch it again over the network.
+        existing = find_completed_video(video_id, quality_key) if video_id else None
+        if existing:
+            log(f"Already have \"{title}\" at {q_label} (in {Path(existing).parent}) — skipping.", "success")
+            mark_done(progress, url, done_key, title)
+            done_now += 1
+            continue
+
         if not is_resume:
             delete_old_versions(output_dir, video_id, log)
         try:
@@ -431,6 +468,9 @@ def download_playlist(url: str, quality_key: str, entries: list,
         if success:
             mark_done(progress, url, done_key, title)
             done_now += 1
+            video_file = _find_video_file(output_dir, video_id) if video_id else None
+            if video_id and video_file:
+                mark_video_done(video_id, quality_key, title, str(video_file))
         else:
             failed.append(title)
 
@@ -441,6 +481,7 @@ def download_playlist(url: str, quality_key: str, entries: list,
         "done":          done_now,
         "failed":        failed,
         "stopped":       stopped,
+        "quality_label": q_label,
     }
 
 

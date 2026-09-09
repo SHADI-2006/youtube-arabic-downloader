@@ -50,7 +50,10 @@ class JobManager:
         self.activity: list = []        # this job's events, replayed to tabs that join mid-job
         self.busy = False
         self.current = ""
+        self.queued: list = []          # [{"name", "label"}] — display only, fn kept out of this list
         self._stop_requested = False
+        self._max_total = 0             # largest total_bytes seen this job — never show a smaller one
+        self._pending: list = []        # [{"name", "label", "fn"}] — actual queue
 
     def emit(self, kind: str, **payload):
         self.events.put({"kind": kind, **payload})
@@ -71,13 +74,22 @@ class JobManager:
     def video_hook(self, d):
         """yt-dlp progress_hook → browser progress bar. Adaptive units
         (bytes/KB/MB/GB) instead of always MB, and raises Cancelled to
-        abort the in-flight download when a stop was requested."""
+        abort the in-flight download when a stop was requested.
+
+        yt-dlp's own total_bytes_estimate is a rough extrapolation from
+        the fragments seen so far and can shrink partway through a
+        download (e.g. an early keyframe-heavy fragment overshoots the
+        per-fragment average) — that looked like the video itself was
+        shrinking. Never display a total smaller than one already shown
+        for this job."""
         if self._stop_requested:
             raise Cancelled("stop requested")
         if d["status"] == "downloading":
-            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
             done = d.get("downloaded_bytes", 0)
             if total:
+                self._max_total = max(self._max_total, total)
+                total = self._max_total
                 speed = d.get("speed") or 0
                 label = f"{fmt_size(done)} / {fmt_size(total)}"
                 if speed:
@@ -86,13 +98,27 @@ class JobManager:
         elif d["status"] == "finished":
             self.progress(1.0, "Processing…")
 
-    def start(self, name: str, fn) -> bool:
-        """Run fn() on a worker thread. False if a job is already running."""
+    def start(self, name: str, fn, label: str = "") -> str:
+        """
+        Run fn() on a worker thread, or queue it if a job is already
+        running — it starts automatically once the current one (and
+        anything queued ahead of it) finishes. Returns "started" or
+        "queued".
+        """
         if self.busy:
-            return False
+            self._pending.append({"name": name, "label": label, "fn": fn})
+            self.queued = [{"name": p["name"], "label": p["label"]} for p in self._pending]
+            self.emit("queued", queue=list(self.queued))
+            self.log(f"Queued: {label}" if label else "Queued — will start when the current job finishes.", "info")
+            return "queued"
+        self._run(name, fn)
+        return "started"
+
+    def _run(self, name: str, fn):
         self.busy = True
         self.current = name
         self._stop_requested = False
+        self._max_total = 0
         self.emit("state", busy=True, job=name)
 
         self.activity.clear()   # each job starts a fresh activity log
@@ -111,9 +137,18 @@ class JobManager:
                 self.progress(0.0, "")
                 self.emit("state", busy=False, job="")
                 self.emit("done")
+                self._advance_queue()
 
         threading.Thread(target=worker, daemon=True).start()
-        return True
+
+    def _advance_queue(self):
+        if not self._pending:
+            return
+        nxt = self._pending.pop(0)
+        self.queued = [{"name": p["name"], "label": p["label"]} for p in self._pending]
+        self.emit("queued", queue=list(self.queued))
+        self.log(f"Starting queued job: {nxt['label']}" if nxt["label"] else "Starting next queued job...", "info")
+        self._run(nxt["name"], nxt["fn"])
 
 
 jobs = JobManager()
@@ -182,17 +217,19 @@ def sizes(req: UrlRequest):
 
 @app.post("/api/download")
 def start_download(req: DownloadRequest):
+    q_label = config.QUALITY_OPTIONS.get(req.quality, (req.quality,))[0]
+
     def task():
         if req.is_playlist:
             jobs.log("Reading playlist…", "info")
             info = youtube.read_playlist_info(req.url, log=jobs.log)
             if not info:
                 jobs.log("Could not read playlist.", "error")
-                log_history("playlist", req.url, req.url, "failed", "could not read playlist")
+                log_history("playlist", req.url, req.url, "failed", f"{q_label} · could not read playlist")
                 return
             entries = [e for e in info.get("entries", []) if e]
             title = info.get("title", "playlist")
-            jobs.log(f"Playlist: {title} ({len(entries)} videos)", "info")
+            jobs.log(f"Playlist: {title} ({len(entries)} videos, {q_label})", "info")
             result = youtube.download_playlist(
                 req.url, req.quality, entries, title,
                 log=jobs.log, on_video_progress=jobs.video_hook,
@@ -201,13 +238,13 @@ def start_download(req: DownloadRequest):
             )
             status = "cancelled" if result["stopped"] else ("failed" if result["failed"] and not result["done"] else "success")
             if result["stopped"]:
-                jobs.log(f"Stopped — {result['done']}/{result['total'] - result['already_done']} downloaded before stopping.", "warn")
+                jobs.log(f"Stopped — {result['done']}/{result['total'] - result['already_done']} downloaded before stopping ({q_label}).", "warn")
             else:
-                jobs.log(f"Finished — saved to {result['output_dir'].resolve()}", "success")
+                jobs.log(f"Finished ({q_label}) — saved to {result['output_dir'].resolve()}", "success")
                 if result["failed"]:
                     jobs.log(f"Failed ({len(result['failed'])}): " + ", ".join(result["failed"][:5]), "warn")
             log_history("playlist", req.url, title, status,
-                        f"{result['done']} downloaded, {len(result['failed'])} failed")
+                        f"{q_label} · {result['done']} downloaded, {len(result['failed'])} failed")
         else:
             out = youtube.download_single(
                 req.url, req.quality, log=jobs.log, on_video_progress=jobs.video_hook,
@@ -215,13 +252,12 @@ def start_download(req: DownloadRequest):
             )
             log_history("video", req.url, out["title"],
                         "cancelled" if out["cancelled"] else ("success" if out["success"] else "failed"),
-                        req.quality)
+                        q_label)
             if out["success"] and req.with_transcript and req.quality != "6":
                 transcript.extract_transcript(req.url, log=jobs.log)
 
-    if not jobs.start("download", task):
-        return {"ok": False, "error": "A job is already running"}
-    return {"ok": True}
+    status = jobs.start("download", task, label=f"Download ({q_label})")
+    return {"ok": True, "status": status}
 
 
 @app.post("/api/transcript")
@@ -230,9 +266,8 @@ def start_transcript(req: UrlRequest):
         out = transcript.extract_transcript(req.url, log=jobs.log)
         log_history("transcript", req.url, out.stem if out else req.url, "success" if out else "failed")
 
-    if not jobs.start("transcript", task):
-        return {"ok": False, "error": "A job is already running"}
-    return {"ok": True}
+    status = jobs.start("transcript", task, label="Transcript")
+    return {"ok": True, "status": status}
 
 
 @app.post("/api/tweet")
@@ -241,9 +276,8 @@ def start_tweet(req: UrlRequest):
         out = social.extract_tweet(req.url, log=jobs.log)
         log_history("tweet", req.url, out.name if out else req.url, "success" if out else "failed")
 
-    if not jobs.start("tweet", task):
-        return {"ok": False, "error": "A job is already running"}
-    return {"ok": True}
+    status = jobs.start("tweet", task, label="X thread")
+    return {"ok": True, "status": status}
 
 
 @app.post("/api/instagram")
@@ -263,9 +297,8 @@ def start_instagram(req: UrlsRequest):
         status = "cancelled" if result["stopped"] else ("failed" if not result["ok"] else "success")
         log_history("instagram", "|".join(req.urls), f"{result['ok']}/{result['total']} reels", status)
 
-    if not jobs.start("instagram", task):
-        return {"ok": False, "error": "A job is already running"}
-    return {"ok": True}
+    status = jobs.start("instagram", task, label=f"Instagram ({len(req.urls)} reel(s))")
+    return {"ok": True, "status": status}
 
 
 @app.post("/api/stop")
@@ -274,6 +307,22 @@ def stop_job():
         return {"ok": False, "error": "Nothing is running"}
     jobs.request_stop()
     return {"ok": True}
+
+
+@app.get("/api/queue")
+def get_queue():
+    return {"busy": jobs.busy, "job": jobs.current, "queue": jobs.queued}
+
+
+@app.post("/api/queue/remove")
+def remove_queued(index: int):
+    if 0 <= index < len(jobs._pending):
+        removed = jobs._pending.pop(index)
+        jobs.queued = [{"name": p["name"], "label": p["label"]} for p in jobs._pending]
+        jobs.log(f"Removed from queue: {removed['label']}" if removed["label"] else "Removed from queue.", "info")
+        jobs.emit("queued", queue=list(jobs.queued))
+        return {"ok": True}
+    return {"ok": False, "error": "No such queued item"}
 
 
 @app.get("/api/videos")
@@ -308,9 +357,8 @@ def fetch_subtitle(req: SubtitleRequest):
             jobs.log("Still no Arabic subtitle available for this video.", "warn")
         log_history("subtitle", url, req.video_id, "success" if found else "failed")
 
-    if not jobs.start("subtitle", task):
-        return {"ok": False, "error": "A job is already running"}
-    return {"ok": True}
+    status = jobs.start("subtitle", task, label="Fetch subtitle")
+    return {"ok": True, "status": status}
 
 
 @app.get("/api/saved-progress")
@@ -351,15 +399,17 @@ def resume(req: UrlRequest):
     progress = load_progress()
     done = progress.get(req.url, {}).get("done", [])
     key = done[0].rsplit("_", 1)[-1] if done and "_" in done[0] else "2"
+    q_label = config.QUALITY_OPTIONS.get(key, (key,))[0]
 
     def task():
         info = youtube.read_playlist_info(req.url, log=jobs.log)
         if not info:
             jobs.log("Could not re-read playlist.", "error")
-            log_history("playlist", req.url, req.url, "failed", "could not re-read playlist")
+            log_history("playlist", req.url, req.url, "failed", f"{q_label} · could not re-read playlist")
             return
         entries = [e for e in info.get("entries", []) if e]
         title = info.get("title", "playlist")
+        jobs.log(f"Resuming at {q_label}...", "info")
         result = youtube.download_playlist(
             req.url, key, entries, title,
             log=jobs.log, on_video_progress=jobs.video_hook,
@@ -368,15 +418,14 @@ def resume(req: UrlRequest):
         )
         status = "cancelled" if result["stopped"] else ("failed" if result["failed"] and not result["done"] else "success")
         if result["stopped"]:
-            jobs.log(f"Stopped — {result['done']} downloaded before stopping.", "warn")
+            jobs.log(f"Stopped — {result['done']} downloaded before stopping ({q_label}).", "warn")
         else:
-            jobs.log(f"Finished — saved to {result['output_dir'].resolve()}", "success")
+            jobs.log(f"Finished ({q_label}) — saved to {result['output_dir'].resolve()}", "success")
         log_history("playlist", req.url, title, status,
-                    f"{result['done']} downloaded, {len(result['failed'])} failed")
+                    f"{q_label} · {result['done']} downloaded, {len(result['failed'])} failed")
 
-    if not jobs.start("resume", task):
-        return {"ok": False, "error": "A job is already running"}
-    return {"ok": True}
+    status = jobs.start("resume", task, label=f"Resume playlist ({q_label})")
+    return {"ok": True, "status": status}
 
 
 @app.post("/api/resume-single")
@@ -384,19 +433,20 @@ def resume_single(req: UrlRequest):
     pending = load_pending().get(req.url)
     if not pending:
         return {"ok": False, "error": "Not a pending download"}
+    q_label = config.QUALITY_OPTIONS.get(pending["quality"], (pending["quality"],))[0]
 
     def task():
+        jobs.log(f"Resuming at {q_label}...", "info")
         out = youtube.download_single(
             req.url, pending["quality"], log=jobs.log, on_video_progress=jobs.video_hook,
             should_stop=jobs.should_stop, is_resume=True,
         )
         log_history("video", req.url, out["title"],
                     "cancelled" if out["cancelled"] else ("success" if out["success"] else "failed"),
-                    pending["quality"])
+                    q_label)
 
-    if not jobs.start("resume", task):
-        return {"ok": False, "error": "A job is already running"}
-    return {"ok": True}
+    status = jobs.start("resume", task, label=f"Resume video ({q_label})")
+    return {"ok": True, "status": status}
 
 
 @app.get("/api/playlist-detail")

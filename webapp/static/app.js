@@ -29,11 +29,10 @@ function setProgress(fraction, label) {
   $("progressLabel").textContent = label || (fraction ? `${(fraction * 100).toFixed(0)}%` : "Idle");
 }
 
+// Buttons stay enabled while busy — starting another action queues it
+// instead of blocking, so you can keep browsing/queuing during a download.
 function setBusy(state) {
   busy = state;
-  document.querySelectorAll(".btn").forEach((b) => {
-    if (b.id !== "btnStop") b.disabled = state;
-  });
   $("btnStop").classList.toggle("hidden", !state);
   $("btnStop").disabled = false;
 }
@@ -42,6 +41,39 @@ $("btnStop").addEventListener("click", () => {
   $("btnStop").disabled = true;
   post("/api/stop", {});
 });
+
+// ── queue ─────────────────────────────────────
+function renderQueue(items) {
+  const box = $("queueBox");
+  if (!box) return;
+  if (!items || !items.length) {
+    box.innerHTML = "";
+    box.classList.add("hidden");
+    return;
+  }
+  box.classList.remove("hidden");
+  box.innerHTML =
+    `<div class="queue-title">Up next (${items.length})</div>` +
+    items
+      .map(
+        (it, i) => `
+      <div class="queue-row">
+        <span>${it.label || it.name}</span>
+        <button class="queue-remove" data-remove="${i}" title="Remove from queue">✕</button>
+      </div>`
+      )
+      .join("");
+  box.querySelectorAll("[data-remove]").forEach((btn) =>
+    btn.addEventListener("click", () =>
+      fetch(`/api/queue/remove?index=${btn.dataset.remove}`, { method: "POST" })
+    )
+  );
+}
+async function loadQueue() {
+  const d = await (await fetch("/api/queue")).json();
+  renderQueue(d.queue);
+}
+loadQueue();
 
 // ── websocket ─────────────────────────────────
 function connect() {
@@ -56,6 +88,7 @@ function connect() {
     else if (e.kind === "progress") setProgress(e.fraction, e.label);
     else if (e.kind === "item") addLog(`[${e.index}/${e.total}] ${e.title}`, "item");
     else if (e.kind === "state") setBusy(e.busy);
+    else if (e.kind === "queued") renderQueue(e.queue);
     else if (e.kind === "done") {
       setProgress(0, "Idle");
       const activeTab = document.querySelector(".tab.active").dataset.tab;

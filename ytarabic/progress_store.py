@@ -5,9 +5,10 @@ import json
 from datetime import datetime
 from .config import DOWNLOAD_DIR, PROGRESS_FILE
 
-HISTORY_FILE  = DOWNLOAD_DIR / ".history.json"
-HISTORY_LIMIT = 200
-PENDING_FILE  = DOWNLOAD_DIR / ".pending.json"
+HISTORY_FILE   = DOWNLOAD_DIR / ".history.json"
+HISTORY_LIMIT  = 200
+PENDING_FILE   = DOWNLOAD_DIR / ".pending.json"
+COMPLETED_FILE = DOWNLOAD_DIR / ".completed.json"
 
 
 def atomic_save_progress(data: dict):
@@ -100,3 +101,38 @@ def _save_pending(pending: dict):
     tmp = PENDING_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(pending, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(PENDING_FILE)
+
+
+# ─────────────────────────────────────────────
+#  Cross single/playlist dedup: "already have this video at this
+#  quality" regardless of whether it was downloaded standalone or as
+#  part of a playlist.
+# ─────────────────────────────────────────────
+def _load_completed() -> dict:
+    if COMPLETED_FILE.exists():
+        try:
+            return json.loads(COMPLETED_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def mark_video_done(video_id: str, quality: str, title: str, path: str):
+    completed = _load_completed()
+    completed[f"{video_id}_{quality}"] = {"title": title, "path": path}
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = COMPLETED_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(completed, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(COMPLETED_FILE)
+
+
+def find_completed_video(video_id: str, quality: str) -> "str | None":
+    """Path to the existing file for (video_id, quality), or None if
+    never downloaded at that quality — or the record is stale because
+    the file was since moved/deleted."""
+    entry = _load_completed().get(f"{video_id}_{quality}")
+    if not entry:
+        return None
+    from pathlib import Path
+    p = Path(entry["path"])
+    return str(p) if p.exists() else None

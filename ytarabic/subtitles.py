@@ -15,7 +15,7 @@ from typing import Callable, Optional
 import yt_dlp
 
 from .config import (
-    AR_TAGS, GEMINI_MODEL, GEMINI_RETRIES, GEMINI_RETRY_WAIT,
+    AR_TAGS, GEMINI_MODEL, GEMINI_RETRIES, GEMINI_RETRY_WAIT, GEMINI_TIMEOUT,
     HAS_FFMPEG, SUB_EXTS, SUBTITLES_EN, UTF8_BOM,
 )
 from .errors import Cancelled
@@ -232,7 +232,9 @@ def translate_srt_to_arabic_gemini(src: Path, log: LogFn = _default_log) -> Opti
     result = None
     for attempt in range(1, GEMINI_RETRIES + 2):
         try:
-            interaction = client.interactions.create(model=GEMINI_MODEL, input=prompt)
+            interaction = client.interactions.create(
+                model=GEMINI_MODEL, input=prompt, timeout=GEMINI_TIMEOUT,
+            )
             result      = interaction.output_text.strip()
             break
         except Exception as e:
