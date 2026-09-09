@@ -7,6 +7,7 @@ of printing directly, so the same logic can drive a CLI, a GUI, or a
 test — `level` is one of "info" | "warn" | "error" | "success".
 """
 
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -107,6 +108,26 @@ def has_arabic_subtitle(files: set) -> bool:
     return False
 
 
+def _find_arabic_subtitle(files: set) -> Optional[Path]:
+    for f in files:
+        if f.suffix in SUB_EXTS and any(tag in f.name.lower() for tag in AR_TAGS):
+            return f
+    return None
+
+
+def _mark_subtitle_source(ar_file: Optional[Path], source: str):
+    """Write a tiny sidecar text file next to the Arabic subtitle recording
+    which engine produced it. A different extension entirely (".source"),
+    so no player ever sees it — it's only there so you can check later,
+    without having watched the live log when the download happened."""
+    if not ar_file:
+        return
+    try:
+        Path(str(ar_file) + ".source").write_text(source, encoding="utf-8")
+    except Exception:
+        pass
+
+
 # ─────────────────────────────────────────────
 #  Translation engine 1 — Google Translate (free, no key, literal)
 # ─────────────────────────────────────────────
@@ -183,6 +204,28 @@ def translate_srt_to_arabic(src: Path, log: LogFn = _default_log) -> Optional[Pa
     return dst
 
 
+_GEMINI_RETRY_DELAY_RE = re.compile(r"retry in ([\d.]+)s", re.IGNORECASE)
+
+
+def _gemini_error_detail(e: Exception) -> str:
+    """The real message Google sent back (which quota metric, its limit,
+    how long to wait) instead of guessing at the cause."""
+    body = getattr(e, "body", None)
+    if isinstance(body, dict):
+        msg = body.get("error", {}).get("message")
+        if msg:
+            return msg
+    return str(e)
+
+
+def _gemini_retry_delay(e: Exception) -> Optional[float]:
+    """Seconds until the quota that tripped this 429 resets, if Google's
+    error message states one (it does for the short per-minute burst
+    limit, not for a fully exhausted daily quota)."""
+    m = _GEMINI_RETRY_DELAY_RE.search(_gemini_error_detail(e))
+    return float(m.group(1)) if m else None
+
+
 # ─────────────────────────────────────────────
 #  Translation engine 2 — Gemini (free tier, priority, best context)
 # ─────────────────────────────────────────────
@@ -241,8 +284,18 @@ def translate_srt_to_arabic_gemini(src: Path, log: LogFn = _default_log) -> Opti
             status_code = getattr(e, "status_code", None) or getattr(e, "code", None)
 
             if status_code == 429:
-                log("GEMINI LIMIT REACHED (HTTP 429) — free-tier request limit hit "
-                    "(per-minute rate or free quota). Falling back to other sources.",
+                delay = _gemini_retry_delay(e)
+                # A short stated delay means this is the per-minute burst
+                # limit resetting, not the daily quota — worth one retry
+                # instead of giving up on a video that would otherwise
+                # translate fine a few seconds later.
+                if delay is not None and delay <= 30 and attempt <= GEMINI_RETRIES:
+                    wait = delay + 1
+                    log(f"Gemini rate limit hit — resets in {wait:.0f}s, retrying "
+                        f"({attempt}/{GEMINI_RETRIES})...", "warn")
+                    time.sleep(wait)
+                    continue
+                log(f"GEMINI LIMIT REACHED (HTTP 429): {_gemini_error_detail(e)}",
                     "error")
                 return None
 
@@ -363,6 +416,7 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log,
         subs = {f for f in output_dir.iterdir() if f.suffix in SUB_EXTS}
         if has_arabic_subtitle(subs):
             fix_subtitle_bom(output_dir)
+            _mark_subtitle_source(_find_arabic_subtitle(subs), "Manual (real Arabic subtitle on YouTube)")
             return
 
     # 2) No manual Arabic — download English as the source to translate
@@ -390,6 +444,7 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log,
         translated = translate_srt_to_arabic_gemini(f, log)
         if translated:
             log(f"Arabic translation saved (Gemini): {translated.name}", "success")
+            _mark_subtitle_source(translated, "Gemini")
         else:
             remaining.append(f)
     if not remaining:
@@ -409,6 +464,7 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log,
         fix_subtitle_bom(output_dir)
         subs = {f for f in output_dir.iterdir() if f.suffix in SUB_EXTS}
         if has_arabic_subtitle(subs):
+            _mark_subtitle_source(_find_arabic_subtitle(subs), "YouTube auto-translate")
             return
 
     # 5) Final fallback — Google Translate (deep-translator), always free
@@ -418,6 +474,7 @@ def fetch_subtitles(url: str, output_dir: Path, log: LogFn = _default_log,
         translated = translate_srt_to_arabic(f, log)
         if translated:
             log(f"Arabic translation saved (Google Translate): {translated.name}", "success")
+            _mark_subtitle_source(translated, "Google Translate (fallback)")
 
 
 # ─────────────────────────────────────────────

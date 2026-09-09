@@ -1,5 +1,6 @@
 """YouTube download logic: options, size estimation, single/playlist download."""
 
+import re
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -24,13 +25,23 @@ def _quality_label(quality_key: str) -> str:
     return QUALITY_OPTIONS.get(quality_key, (quality_key,))[0]
 
 
+_FORMAT_CODE_RE = re.compile(r"\.f\d+$")
+
+
 def _find_video_file(directory: Path, video_id: str) -> Optional[Path]:
-    """Locate the downloaded video file for video_id in directory."""
+    """Locate the final, merged video file for video_id in directory.
+
+    Excludes yt-dlp's per-format intermediate files (e.g. "Title [id].f617.mp4"
+    — the video-only stream before it's merged with audio). Those match the
+    same [id]+extension check as the real output, so without this a leftover
+    fragment from an earlier interrupted download could get mistaken for the
+    finished file and reported as "done" with no audio track.
+    """
     if not directory.exists():
         return None
     tag = f"[{video_id}]"
     for f in directory.iterdir():
-        if tag in f.name and f.suffix.lower() in VALID_VIDEO_EXTS:
+        if tag in f.name and f.suffix.lower() in VALID_VIDEO_EXTS and not _FORMAT_CODE_RE.search(f.stem):
             return f
     return None
 

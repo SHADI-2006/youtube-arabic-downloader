@@ -1,6 +1,23 @@
 """Small formatting helpers shared across the package."""
 
+import re
+
 from yt_dlp.utils import sanitize_filename
+
+_YT_ID_RE = re.compile(
+    r"(?:youtu\.be/|youtube\.com/(?:watch\?v=|shorts/|embed/|live/))([A-Za-z0-9_-]{11})"
+)
+
+
+def normalize_youtube_url(url: str) -> str:
+    """Collapse different share-link variants of the same YouTube video
+    (youtu.be/ID?si=..., youtube.com/watch?v=ID&si=..., /shorts/ID, ...)
+    to one canonical form. Without this, re-pasting a freshly-shared link
+    for a video already in progress creates a brand new pending/history
+    entry instead of recognizing it as the same download, so Resume never
+    finds it and each attempt restarts instead of continuing."""
+    m = _YT_ID_RE.search(url)
+    return f"https://www.youtube.com/watch?v={m.group(1)}" if m else url
 
 
 def fmt_size(b: float) -> str:

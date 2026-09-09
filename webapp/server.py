@@ -25,7 +25,7 @@ from ytarabic.progress_store import (
     clear_single_pending, load_history, load_pending, load_progress,
     log_history, mark_single_pending,
 )
-from ytarabic.utils import fmt_size
+from ytarabic.utils import fmt_size, normalize_youtube_url
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -246,15 +246,16 @@ def start_download(req: DownloadRequest):
             log_history("playlist", req.url, title, status,
                         f"{q_label} · {result['done']} downloaded, {len(result['failed'])} failed")
         else:
+            url = normalize_youtube_url(req.url)
             out = youtube.download_single(
-                req.url, req.quality, log=jobs.log, on_video_progress=jobs.video_hook,
+                url, req.quality, log=jobs.log, on_video_progress=jobs.video_hook,
                 should_stop=jobs.should_stop,
             )
-            log_history("video", req.url, out["title"],
+            log_history("video", url, out["title"],
                         "cancelled" if out["cancelled"] else ("success" if out["success"] else "failed"),
                         q_label)
             if out["success"] and req.with_transcript and req.quality != "6":
-                transcript.extract_transcript(req.url, log=jobs.log)
+                transcript.extract_transcript(url, log=jobs.log)
 
     status = jobs.start("download", task, label=f"Download ({q_label})")
     return {"ok": True, "status": status}
@@ -430,7 +431,8 @@ def resume(req: UrlRequest):
 
 @app.post("/api/resume-single")
 def resume_single(req: UrlRequest):
-    pending = load_pending().get(req.url)
+    url = normalize_youtube_url(req.url)
+    pending = load_pending().get(url)
     if not pending:
         return {"ok": False, "error": "Not a pending download"}
     q_label = config.QUALITY_OPTIONS.get(pending["quality"], (pending["quality"],))[0]
@@ -438,10 +440,10 @@ def resume_single(req: UrlRequest):
     def task():
         jobs.log(f"Resuming at {q_label}...", "info")
         out = youtube.download_single(
-            req.url, pending["quality"], log=jobs.log, on_video_progress=jobs.video_hook,
+            url, pending["quality"], log=jobs.log, on_video_progress=jobs.video_hook,
             should_stop=jobs.should_stop, is_resume=True,
         )
-        log_history("video", req.url, out["title"],
+        log_history("video", url, out["title"],
                     "cancelled" if out["cancelled"] else ("success" if out["success"] else "failed"),
                     q_label)
 
