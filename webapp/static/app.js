@@ -86,7 +86,7 @@ const I18N = {
     probing: "Reading the link…",
     views: "{n} views", n_videos: "{n} videos", chapters_n: "{n} chapters",
     ar_manual: "Human-made Arabic subtitle", ar_youtube: "Arabic: YouTube's translation",
-    ar_gemini: "Arabic: Gemini translation", ar_google: "Arabic: Google Translate",
+    ar_google: "Arabic: Google Translate",
     no_subs_site: "Subtitles: YouTube only",
     in_playlist: "This video is part of a playlist.",
     this_video: "This video", whole_playlist: "Whole playlist",
@@ -112,7 +112,7 @@ const I18N = {
     play: "Play", root_folder: "downloads",
     no_subtitle: "No subtitle", human: "Human",
     m_subtitles: "Subtitles", m_get_ar: "Get Arabic subtitle (best available)", m_refetch_ar: "Re-fetch Arabic subtitle (best available)",
-    m_gemini: "Translate with Gemini", m_youtube: "Use YouTube's Arabic translation",
+    m_youtube: "Use YouTube's Arabic translation",
     m_google: "Translate with Google", m_english: "Get English subtitle",
     m_more: "More", m_embed: "Embed subtitles into the file", m_transcript: "Extract transcript",
     m_open_yt: "Open on YouTube",
@@ -151,14 +151,8 @@ const I18N = {
     set_rate_limit: "Speed limit", set_rate_limit_hint: "0 = unlimited. Handy so a big download doesn't eat the whole connection.",
     set_sub_mode: "Subtitles by default",
     set_embed: "Embed subtitles into the video file by default (soft track — can be switched off in the player)",
-    set_translation: "Arabic translation",
-    set_translation_hint: "A real (human-made) Arabic subtitle is always used first when YouTube has one. Otherwise:",
-    order_youtube: "YouTube's translation first",
-    order_youtube_hint: "Instant and free. Gemini is only used when YouTube has no Arabic translation.",
-    order_gemini: "Gemini first",
-    order_gemini_hint: "Usually more natural — reads the whole video for context. Uses your free Gemini quota.",
-    set_gemini_model: "Gemini model",
-    set_gemini_model_hint: "Used for translation and summaries. Change it here instead of in the code when Google releases a new model.",
+    set_translation_hint: "Arabic subtitle order: a real (human-made) one if YouTube has it, otherwise YouTube's own translation, otherwise Google Translate.",
+    set_gemini_model: "Gemini model (summaries)",
     set_transcripts: "Transcripts & summaries", set_summary_lang: "Summary language",
     set_interface: "Interface", set_ui_lang: "Interface language",
     set_notify: "Desktop notification when a download finishes (while this tab is in the background)",
@@ -167,7 +161,7 @@ const I18N = {
     env_ffmpeg: "FFmpeg", env_ffmpeg_missing: "Not found — needed above 360p and for MP3. Install: winget install Gyan.FFmpeg, then restart.",
     env_cookies: "YouTube cookies", env_cookies_missing: "Not set — only needed if YouTube asks you to sign in. Set YT_COOKIES_FILE in .env.",
     env_ig: "Instagram cookies", env_ig_missing: "Not set — only needed for private accounts (INSTAGRAM_COOKIES_FILE).",
-    env_gemini: "Gemini API key", env_gemini_missing: "Not set — free key at aistudio.google.com/apikey, then GEMINI_API_KEY in .env.",
+    env_gemini: "Gemini API key", env_gemini_missing: "Not set — only needed for summaries. Free key at aistudio.google.com/apikey, then GEMINI_API_KEY in .env.",
     env_folder: "Downloads folder", env_version: "Version", env_set: "Set", env_found: "Found",
     notify_denied: "Notifications are blocked for this page in the browser settings.",
     // console
@@ -205,7 +199,7 @@ const I18N = {
     probing: "جارٍ قراءة الرابط…",
     views: "{n} مشاهدة", n_videos: "{n} فيديو", chapters_n: "{n} فصول",
     ar_manual: "ترجمة عربية بشرية", ar_youtube: "العربية: ترجمة يوتيوب",
-    ar_gemini: "العربية: ترجمة Gemini", ar_google: "العربية: ترجمة Google",
+    ar_google: "العربية: ترجمة Google",
     no_subs_site: "الترجمة: ليوتيوب فقط",
     in_playlist: "هذا الفيديو جزء من قائمة تشغيل.",
     this_video: "هذا الفيديو", whole_playlist: "القائمة كاملة",
@@ -230,7 +224,7 @@ const I18N = {
     play: "تشغيل", root_folder: "downloads",
     no_subtitle: "بدون ترجمة", human: "بشرية",
     m_subtitles: "الترجمة", m_get_ar: "جلب ترجمة عربية (أفضل المتاح)", m_refetch_ar: "إعادة جلب الترجمة العربية (أفضل المتاح)",
-    m_gemini: "ترجمة باستخدام Gemini", m_youtube: "استخدام ترجمة يوتيوب العربية",
+    m_youtube: "استخدام ترجمة يوتيوب العربية",
     m_google: "ترجمة باستخدام Google", m_english: "جلب الترجمة الإنكليزية",
     m_more: "المزيد", m_embed: "دمج الترجمة داخل الملف", m_transcript: "استخراج النص",
     m_open_yt: "فتح على يوتيوب",
@@ -264,14 +258,8 @@ const I18N = {
     set_rate_limit: "حد السرعة", set_rate_limit_hint: "0 = بلا حد. مفيد حتى لا يستهلك تحميل كبير الإنترنت كله.",
     set_sub_mode: "الترجمة الافتراضية",
     set_embed: "دمج الترجمة داخل ملف الفيديو افتراضياً (مسار ترجمة يمكن إخفاؤه من المشغل)",
-    set_translation: "الترجمة العربية",
-    set_translation_hint: "تُستخدم الترجمة العربية البشرية أولاً دائماً إن وُجدت على يوتيوب. وإلا:",
-    order_youtube: "ترجمة يوتيوب أولاً",
-    order_youtube_hint: "فورية ومجانية. يُستخدم Gemini فقط إن لم تتوفر ترجمة يوتيوب العربية.",
-    order_gemini: "Gemini أولاً",
-    order_gemini_hint: "أكثر طبيعية غالباً — يقرأ الفيديو كاملاً لفهم السياق. يستهلك من حصة Gemini المجانية.",
-    set_gemini_model: "نموذج Gemini",
-    set_gemini_model_hint: "يُستخدم للترجمة والتلخيص. غيّره من هنا بدل تعديل الكود عند صدور نموذج جديد.",
+    set_translation_hint: "ترتيب الترجمة العربية: الترجمة البشرية إن وُجدت على يوتيوب، وإلا ترجمة يوتيوب نفسها، وإلا ترجمة Google.",
+    set_gemini_model: "نموذج Gemini (للتلخيص)",
     set_transcripts: "النصوص والملخصات", set_summary_lang: "لغة الملخص",
     set_interface: "الواجهة", set_ui_lang: "لغة الواجهة",
     set_notify: "إشعار على سطح المكتب عند انتهاء التحميل (عندما تكون الصفحة في الخلفية)",
@@ -280,7 +268,7 @@ const I18N = {
     env_ffmpeg: "FFmpeg", env_ffmpeg_missing: "غير موجود — ضروري للجودة فوق 360p ولملفات MP3. للتثبيت: winget install Gyan.FFmpeg ثم أعد التشغيل.",
     env_cookies: "كوكيز يوتيوب", env_cookies_missing: "غير مضبوطة — مطلوبة فقط إن طلب يوتيوب تسجيل الدخول. اضبط YT_COOKIES_FILE في .env",
     env_ig: "كوكيز إنستغرام", env_ig_missing: "غير مضبوطة — مطلوبة فقط للحسابات الخاصة (INSTAGRAM_COOKIES_FILE).",
-    env_gemini: "مفتاح Gemini", env_gemini_missing: "غير مضبوط — مفتاح مجاني من aistudio.google.com/apikey ثم GEMINI_API_KEY في .env",
+    env_gemini: "مفتاح Gemini", env_gemini_missing: "غير مضبوط — مطلوب للتلخيص فقط. مفتاح مجاني من aistudio.google.com/apikey ثم GEMINI_API_KEY في .env",
     env_folder: "مجلد التحميل", env_version: "الإصدار", env_set: "مضبوط", env_found: "موجود",
     notify_denied: "الإشعارات محظورة لهذه الصفحة من إعدادات المتصفح.",
     activity: "النشاط", stop: "إيقاف", clear_log: "مسح السجل", log_empty: "بانتظار مهمة…",
@@ -794,14 +782,8 @@ function currentPlaylist() {
 
 function arabicChip(p) {
   if (!p.subtitles_supported) return `<span class="chip">${icon("cc")}${esc(t("no_subs_site"))}</span>`;
-  const g = state.status?.gemini;
-  const geminiFirst = state.settings.translation_order === "gemini_first";
   if (p.arabic?.manual) return `<span class="chip ok">${icon("check")}${esc(t("ar_manual"))}</span>`;
-  let key;
-  if (geminiFirst && g) key = "ar_gemini";
-  else if (p.arabic?.auto) key = "ar_youtube";
-  else key = g ? "ar_gemini" : "ar_google";
-  return `<span class="chip info">${icon("cc")}${esc(t(key))}</span>`;
+  return `<span class="chip info">${icon("cc")}${esc(t(p.arabic?.auto ? "ar_youtube" : "ar_google"))}</span>`;
 }
 
 function renderPreview() {
@@ -1209,7 +1191,6 @@ function toggleMenu(menu, it) {
     entries.push(`<div class="menu-label">${esc(t("m_subtitles"))}</div>`);
     if (vid) {
       entries.push(menuItem("sub-auto", "cc", it.has_arabic ? t("m_refetch_ar") : t("m_get_ar")));
-      entries.push(menuItem("sub-gemini", "sparkle", t("m_gemini")));
       entries.push(menuItem("sub-youtube", "youtube", t("m_youtube")));
       entries.push(menuItem("sub-google", "globe", t("m_google")));
       entries.push(menuItem("sub-english", "cc", t("m_english")));

@@ -26,12 +26,7 @@ DEFAULTS = {
     # en     — English only, no translation
     # none   — no subtitles at all
     "subtitle_mode":         "ar",
-    # Which machine translation to try first when a video has no real
-    # (human-made) Arabic subtitle. YouTube's own is instant and costs
-    # nothing; Gemini reads the whole file for context and usually reads
-    # more naturally, but uses your free-tier quota.
-    "translation_order":     "youtube_first",   # youtube_first | gemini_first
-    "gemini_model":          GEMINI_MODEL,
+    "gemini_model":          GEMINI_MODEL,    # for transcript summaries
     "embed_subtitles":       False,   # mux subtitles into the video file as a soft track
     "rate_limit_mb":         0,       # download speed cap in MB/s, 0 = unlimited
     "transcript_lang":       "auto",  # auto (video's own language) | en | ar
@@ -42,7 +37,6 @@ DEFAULTS = {
 _CHOICES = {
     "default_quality":   set(QUALITY_OPTIONS),
     "subtitle_mode":     {"ar", "ar_en", "en", "none"},
-    "translation_order": {"youtube_first", "gemini_first"},
     "transcript_lang":   {"auto", "en", "ar"},
     "summary_lang":      {"ar", "en"},
 }

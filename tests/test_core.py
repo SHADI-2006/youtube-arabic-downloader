@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests import TEST_ROOT
-from ytarabic import config, gemini, library, media, progress_store, settings, subtitles, transcript, youtube
+from ytarabic import config, library, media, progress_store, settings, subtitles, transcript, youtube
 from ytarabic.config import UTF8_BOM
 from ytarabic.utils import (
     classify_url, extract_playlist_id, extract_youtube_id, normalize_playlist_url,
@@ -60,10 +60,11 @@ class SettingsTests(unittest.TestCase):
 
     def test_defaults_and_update(self):
         self.assertEqual(settings.load(), settings.DEFAULTS)
-        data, rejected = settings.update({"default_quality": "5", "translation_order": "gemini_first",
+        data, rejected = settings.update({"default_quality": "5", "subtitle_mode": "ar_en",
                                           "rate_limit_mb": "2.5", "embed_subtitles": True})
         self.assertEqual(rejected, [])
         self.assertEqual(settings.get("default_quality"), "5")
+        self.assertEqual(settings.get("subtitle_mode"), "ar_en")
         self.assertEqual(settings.get("rate_limit_mb"), 2.5)
         self.assertTrue(settings.get("embed_subtitles"))
 
@@ -129,8 +130,7 @@ class SubtitleFileTests(unittest.TestCase):
             def download(self, urls): pass
 
         with mock.patch.object(subtitles, "arabic_lang_options", return_value=(None, None)), \
-             mock.patch.object(subtitles.yt_dlp, "YoutubeDL", NoopYDL), \
-             mock.patch.object(gemini, "unavailable_reason", return_value="no key (test)"):
+             mock.patch.object(subtitles.yt_dlp, "YoutubeDL", NoopYDL):
             result = subtitles.fetch_subtitles(url, self.dir, log=lambda *a: None, mode="ar")
 
         self.assertIsNone(result)
@@ -138,12 +138,13 @@ class SubtitleFileTests(unittest.TestCase):
         self.assertEqual(subtitles.read_subtitle_source(old), "Gemini")
         self.assertEqual([p.name for p in self.dir.glob("*.bak")], [])
 
-    def test_engine_order_follows_setting(self):
-        settings.SETTINGS_FILE.unlink(missing_ok=True)
-        self.assertEqual(subtitles._engine_order("auto"), ["manual", "youtube", "gemini", "google"])
-        settings.update({"translation_order": "gemini_first"})
-        self.assertEqual(subtitles._engine_order("auto"), ["manual", "gemini", "youtube", "google"])
+    def test_engine_order_has_no_gemini(self):
+        # An old settings.json may still say "gemini_first" — it must be ignored
+        settings.SETTINGS_FILE.write_text(json.dumps({"translation_order": "gemini_first"}), encoding="utf-8")
+        self.assertEqual(subtitles._engine_order("auto"), ["manual", "youtube", "google"])
         self.assertEqual(subtitles._engine_order("google"), ["google"])
+        self.assertNotIn("gemini", subtitles.ENGINES)
+        self.assertEqual(settings.load(), settings.DEFAULTS)
         settings.SETTINGS_FILE.unlink(missing_ok=True)
 
     def test_srt_to_vtt(self):

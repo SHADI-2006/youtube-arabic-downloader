@@ -196,30 +196,7 @@
             </label>
           </div>
           <label class="switch"><input type="checkbox" name="embed_subtitles" /><span class="track"></span><span data-i18n="set_embed">Embed subtitles into the video file by default (soft track — can be switched off in the player)</span></label>
-        </fieldset>
-
-        <fieldset>
-          <legend data-i18n="set_translation">Arabic translation</legend>
-          <p class="hint" data-i18n="set_translation_hint">A real (human-made) Arabic subtitle is always used first when YouTube has one. Otherwise:</p>
-          <div class="radio-cards">
-            <label class="radio-card">
-              <input type="radio" name="translation_order" value="youtube_first" />
-              <span class="rc-body"><strong data-i18n="order_youtube">YouTube's translation first</strong><small data-i18n="order_youtube_hint">Instant and free. Gemini is only used when YouTube has no Arabic translation.</small></span>
-            </label>
-            <label class="radio-card">
-              <input type="radio" name="translation_order" value="gemini_first" />
-              <span class="rc-body"><strong data-i18n="order_gemini">Gemini first</strong><small data-i18n="order_gemini_hint">Usually more natural — reads the whole video for context. Uses your free Gemini quota.</small></span>
-            </label>
-          </div>
-          <label class="field">
-            <span data-i18n="set_gemini_model">Gemini model</span>
-            <input type="text" name="gemini_model" list="geminiModels" dir="ltr" spellcheck="false" />
-            <datalist id="geminiModels">
-              <option value="gemini-3.5-flash-lite"></option>
-              <option value="gemini-3.6-flash"></option>
-            </datalist>
-            <small data-i18n="set_gemini_model_hint">Used for translation and summaries. Change it here instead of in the code when Google releases a new model.</small>
-          </label>
+          <p class="hint" style="margin:12px 0 0" data-i18n="set_translation_hint">Arabic subtitle order: a real (human-made) one if YouTube has it, otherwise YouTube's own translation, otherwise Google Translate.</p>
         </fieldset>
 
         <fieldset>
@@ -239,6 +216,14 @@
                 <option value="ar">العربية</option>
                 <option value="en">English</option>
               </select>
+            </label>
+            <label class="field">
+              <span data-i18n="set_gemini_model">Gemini model (summaries)</span>
+              <input type="text" name="gemini_model" list="geminiModels" dir="ltr" spellcheck="false" />
+              <datalist id="geminiModels">
+                <option value="gemini-3.5-flash-lite"></option>
+                <option value="gemini-3.6-flash"></option>
+              </datalist>
             </label>
           </div>
           <label class="switch"><input type="checkbox" name="transcript_timestamps" /><span class="track"></span><span data-i18n="with_timestamps">Timestamps on every line</span></label>

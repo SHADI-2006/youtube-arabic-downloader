@@ -6,8 +6,8 @@ file in the project root if one exists (never committed — see .gitignore).
 The `.env` file wins only where the variable isn't already set in the
 environment, so an explicit shell variable always takes precedence.
 
-User preferences that can change at runtime (default quality, translation
-order, Gemini model, ...) live in settings.py instead — they're editable
+User preferences that can change at runtime (default quality, subtitle
+mode, Gemini model, ...) live in settings.py instead — they're editable
 from the web UI without touching code.
 """
 
@@ -43,18 +43,15 @@ COOKIES_FILE = os.environ.get("YT_COOKIES_FILE", "")
 # logged into instagram.com.
 INSTAGRAM_COOKIES_FILE = os.environ.get("INSTAGRAM_COOKIES_FILE", "")
 
-# Default Gemini model used for auto-translation and summaries — the one
-# actually used is the "gemini_model" setting (Settings tab), which starts
-# out as this. See subtitles.py for the full Arabic-subtitle priority chain.
+# Default Gemini model for transcript summaries (Gemini is no longer used
+# for subtitle translation) — the one actually used is the "gemini_model"
+# setting (Settings tab), which starts out as this.
 GEMINI_MODEL      = "gemini-3.5-flash-lite"
 GEMINI_RETRIES    = 2    # extra attempts on transient server/connection errors
 GEMINI_RETRY_WAIT = 5    # seconds between those retries (never retries a 429)
 GEMINI_TIMEOUT    = 90   # seconds — without this, a stalled request hangs forever
-                          # (no retry, no way to Stop it — it's not a checkpoint yt-dlp
-                          # or our should_stop() callback ever gets a chance to hit).
-                          # A 150-cue chunk measured ~33s under light load but 60-90s+
-                          # under heavier account contention, so 30s was timing out on
-                          # essentially every request — 90s gives real margin.
+                          # (no retry, no way to Stop it — it's not a checkpoint
+                          # our should_stop() callback ever gets a chance to hit).
 GEMINI_SUMMARY_TIMEOUT = 240   # a whole multi-hour transcript in one request
 
 # ── Runtime constants ──

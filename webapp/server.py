@@ -175,7 +175,7 @@ class PathRequest(BaseModel):
 
 class SubtitleRequest(BaseModel):
     path: str
-    engine: str = "auto"     # auto | manual | youtube | gemini | google | english
+    engine: str = "auto"     # auto | manual | youtube | google | english
 
 
 class SummaryRequest(BaseModel):

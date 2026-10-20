@@ -1,7 +1,7 @@
 """
-Thin wrapper around the Gemini API (google-genai, free tier) shared by
-subtitle translation and transcript summaries: one place for the client,
-the model choice, and the 429/transient-error retry policy.
+Thin wrapper around the Gemini API (google-genai, free tier), used for
+transcript summaries: one place for the client, the model choice, and the
+429/transient-error retry policy.
 """
 
 import os

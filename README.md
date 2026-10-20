@@ -22,18 +22,16 @@ extracting clean transcripts to feed into an LLM for analysis.
 - **Arabic subtitles, always** — a priority chain finds the best Arabic
   subtitle available, and translates one itself if YouTube has none:
   1. Real, human-authored Arabic subtitle (if YouTube has one).
-  2. YouTube's own auto-translated Arabic captions, or
-     [Gemini](https://aistudio.google.com/apikey) (free tier) — which one
-     goes first is a setting. Gemini reads the whole subtitle file for a
-     natural, context-aware translation instead of cue-by-cue.
-  3. Google Translate — always free, no key, final safety net.
+  2. YouTube's own auto-translated Arabic captions.
+  3. Google Translate on the English subtitle — always free, no key,
+     final safety net.
 
   Subtitles can be Arabic, Arabic + English, English only, or none — and
   can be **embedded into the video file** as a switchable track.
 - **Library** — every downloaded video with its subtitles (and which engine
   made the Arabic one), a **built-in player** with Arabic subtitles,
-  "show in folder", and per-video actions: re-translate with Gemini / Google
-  / YouTube, fetch English, embed subtitles, extract the transcript.
+  "show in folder", and per-video actions: re-fetch the Arabic subtitle
+  (YouTube or Google), fetch English, embed subtitles, extract the transcript.
 - **Clean up leftovers** — finds the partial files interrupted downloads
   leave behind (often hundreds of MB) and frees them; resumable ones are
   kept unless you say otherwise.
@@ -44,8 +42,8 @@ extracting clean transcripts to feed into an LLM for analysis.
 - **Instagram Reels** download.
 - **History** — every download, transcript, and extraction is logged, with
   search, filters, and one-click retry.
-- **Settings in the UI** — default quality, subtitles, translation order,
-  Gemini model, speed limit, transcript language; no code edits needed.
+- **Settings in the UI** — default quality, subtitles, speed limit,
+  transcript language, Gemini model for summaries; no code edits needed.
 - **English or Arabic interface** (full right-to-left layout), desktop
   notifications when a download finishes.
 - **Two interfaces on the same core logic**: a polished terminal UI, and a
@@ -74,13 +72,13 @@ cp .env.example .env
 
 | Variable                 | Required? | Purpose                                                                 |
 | ------------------------- | --------- | ------------------------------------------------------------------------ |
-| `GEMINI_API_KEY`          | Optional  | Enables the best-quality Arabic translation tier. Free key: [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| `GEMINI_API_KEY`          | Optional  | Only for transcript summaries. Free key: [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | `YT_COOKIES_FILE`         | Optional  | Path to a YouTube cookies.txt file (fixes bot-detection errors on some videos). Export with the "Get cookies.txt LOCALLY" browser extension. |
 | `INSTAGRAM_COOKIES_FILE`  | Optional  | Same idea, for private Instagram accounts.                              |
 
 Plain environment variables work too and take precedence over `.env`.
-Without `GEMINI_API_KEY`, Arabic translation still works — it just skips
-straight to YouTube's own auto-translation, then Google Translate.
+Arabic subtitles need no key at all; without `GEMINI_API_KEY` only the
+transcript summaries are unavailable.
 
 ## Usage
 

@@ -565,17 +565,6 @@ html[lang="ar"] .kind-tag { letter-spacing: 0; font-size: 11px; }
 .settings legend { padding: 0 8px; font-weight: 650; font-size: 13.5px; color: var(--text); }
 .settings .switch { margin-top: 6px; }
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 18px; }
-.radio-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-bottom: 14px; }
-.radio-card {
-  display: flex; gap: 10px; align-items: flex-start;
-  padding: 12px 14px; border-radius: var(--radius);
-  border: 1px solid var(--border); background: var(--bg-raised);
-  cursor: pointer; transition: border-color .15s, background .15s;
-}
-.radio-card input { accent-color: var(--accent); margin-top: 3px; }
-.radio-card:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
-.rc-body { display: flex; flex-direction: column; gap: 3px; }
-.rc-body small { color: var(--muted); font-size: 12px; }
 .env-grid { display: grid; grid-template-columns: auto 1fr; gap: 9px 16px; align-items: start; font-size: 13px; }
 .env-grid .k { color: var(--muted); }
 .env-grid .v { min-width: 0; overflow-wrap: anywhere; }
