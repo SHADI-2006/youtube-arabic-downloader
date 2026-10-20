@@ -29,8 +29,9 @@ except ImportError:
     print("ERROR: Install required libraries first:\n  pip install -r requirements.txt")
     sys.exit(1)
 
-from ytarabic import config, social, subtitles, transcript, youtube
+from ytarabic import config, library, social, subtitles, transcript, youtube
 from ytarabic.progress_store import load_progress
+from ytarabic.utils import fmt_size, normalize_playlist_url
 
 console = Console()
 LEVEL_STYLE = {"info": "cyan", "warn": "yellow", "error": "bold red", "success": "bold green"}
@@ -144,6 +145,7 @@ def action_download_single(url: str):
 
 
 def action_download_playlist(url: str):
+    url = normalize_playlist_url(url)
     log("Reading playlist...", "info")
     info = youtube.read_playlist_info(url, log=log)
     if not info:
@@ -210,7 +212,7 @@ def action_resume():
         done = data.get("done", [])
         if not done:
             continue
-        key = done[0].rsplit("_", 1)[-1] if "_" in done[0] else "2"
+        key = data.get("quality") or (done[0].rsplit("_", 1)[-1] if "_" in done[0] else "2")
         candidates.append((url, data, key))
     if not candidates:
         log("No resumable downloads found.", "warn")
@@ -220,7 +222,7 @@ def action_resume():
     table.add_column("#"); table.add_column("Quality"); table.add_column("Done"); table.add_column("URL")
     for i, (url, data, key) in enumerate(candidates, 1):
         qlabel = config.QUALITY_OPTIONS.get(key, ("?",))[0]
-        table.add_row(str(i), qlabel, str(len(data.get("done", []))), url[:55])
+        table.add_row(str(i), qlabel, str(len(data.get("done", []))), (data.get("title") or url)[:55])
     console.print(table)
 
     choice = Prompt.ask("\n  Pick number (0 = back)", default="0")
@@ -235,7 +237,7 @@ def action_resume():
     entries = [e for e in info.get("entries", []) if e]
     result = run_with_progress(
         "Downloading", youtube.download_playlist, url, key, entries,
-        info.get("title", "playlist"), log=log,
+        info.get("title", "playlist"), log=log, is_resume=True,
     )
     console.print(f"\n  [green]Finished! Saved to: {result['output_dir'].resolve()}[/green]")
 
@@ -285,6 +287,25 @@ def action_retry_subtitle():
         log("Still no Arabic subtitle available for this video.", "warn")
 
 
+def action_cleanup():
+    found = library.find_leftovers()
+    if not found["junk"] and not found["unfinished"]:
+        log("No leftover partial files.", "success")
+        return
+    console.print(f"\n  Leftovers of finished downloads : [yellow]{len(found['junk'])} file(s), "
+                  f"{fmt_size(found['junk_bytes']) if found['junk'] else '0 B'}[/yellow]")
+    console.print(f"  Unfinished (still resumable)    : {len(found['unfinished'])} file(s), "
+                  f"{fmt_size(found['unfinished_bytes']) if found['unfinished'] else '0 B'}")
+    if found["junk"] and not Confirm.ask("\n  Delete the leftovers of finished downloads?", default=True):
+        return
+    include_unfinished = bool(found["unfinished"]) and Confirm.ask(
+        "  Also delete the unfinished downloads? (they can't be resumed afterwards)", default=False)
+    if not found["junk"] and not include_unfinished:
+        return
+    result = library.cleanup(include_unfinished, log=log)
+    log(f"Removed {result['removed']} file(s), freed {fmt_size(result['freed'])}.", "success")
+
+
 # ─────────────────────────────────────────────
 #  Main menu
 # ─────────────────────────────────────────────
@@ -297,6 +318,7 @@ MENU = [
     ("6", "Extract tweet / X thread"),
     ("7", "Download Instagram reel(s)"),
     ("8", "Retry missing subtitle  (no re-download needed)"),
+    ("9", "Clean up leftover partial files"),
     ("0", "Exit"),
 ]
 
@@ -352,6 +374,9 @@ def main():
                 pause_return()
         elif choice == "8":
             action_retry_subtitle()
+            pause_return()
+        elif choice == "9":
+            action_cleanup()
             pause_return()
         elif choice == "0":
             console.print("  Bye!")

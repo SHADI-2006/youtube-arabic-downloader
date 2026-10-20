@@ -66,7 +66,7 @@ def extract_tweet(url: str, log: LogFn = _default_log) -> Optional[Path]:
         log(f"Error: {err}", "error")
         if any(k in err.lower() for k in ("login", "auth", "cookie", "sign in")):
             log("Twitter/X requires its own cookies — export them while logged "
-                "into twitter.com and set COOKIES_FILE.", "warn")
+                "into x.com and set YT_COOKIES_FILE.", "warn")
         return None
     if not info:
         log("Could not fetch tweet info.", "error")

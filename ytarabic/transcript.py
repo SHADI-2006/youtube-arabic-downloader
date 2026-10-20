@@ -1,4 +1,4 @@
-"""Transcript extraction — plain-text English transcript for AI analysis."""
+"""Transcript extraction — plain-text transcript for reading or AI analysis."""
 
 import json
 import re
@@ -8,9 +8,10 @@ from typing import Callable, Optional
 
 import yt_dlp
 
+from . import settings
 from .config import DOWNLOAD_DIR
-from .utils import fmt_time
-from .youtube import base_opts
+from .utils import fmt_time, safe_file_stem
+from .youtube import base_opts, clean_error
 
 LogFn = Callable[[str, str], None]
 
@@ -19,52 +20,24 @@ def _default_log(msg: str, level: str = "info") -> None:
     print(msg)
 
 
-def _parse_json3(data: str, chapters: list) -> str:
-    """Parse YouTube json3 subtitles, split into chapters if provided."""
+# ─────────────────────────────────────────────
+#  Parsing: subtitle track → [(start_seconds, text)]
+# ─────────────────────────────────────────────
+def _cues_from_json3(data: str) -> list:
     try:
         obj = json.loads(data)
     except Exception:
-        return ""
-    events = obj.get("events", [])
-
-    if not chapters:
-        lines, seen = [], set()
-        for ev in events:
-            line = "".join(s.get("utf8", "") for s in ev.get("segs", [])).strip()
-            line = re.sub(r"<[^>]+>", "", line).strip()
-            if line and line != "\n" and line not in seen:
-                seen.add(line)
-                lines.append(line)
-        return "\n".join(lines)
-
-    chapter_lines: dict = {i: [] for i in range(len(chapters))}
-    seen_global: set = set()
-    for ev in events:
-        t_sec = ev.get("tStartMs", 0) / 1000.0
-        line  = "".join(s.get("utf8", "") for s in ev.get("segs", [])).strip()
-        line  = re.sub(r"<[^>]+>", "", line).strip()
-        if not line or line == "\n":
-            continue
-        ch_idx = 0
-        for i, ch in enumerate(chapters):
-            if t_sec >= ch["start_time"]:
-                ch_idx = i
-            else:
-                break
-        if line not in seen_global:
-            seen_global.add(line)
-            chapter_lines[ch_idx].append(line)
-
-    parts = []
-    for i, ch in enumerate(chapters):
-        header = f"\n{'─'*50}\n▶ Chapter {i+1}: {ch['title']}  [{fmt_time(ch['start_time'])}]\n{'─'*50}"
-        body   = "\n".join(chapter_lines[i]) if chapter_lines[i] else "  (no transcript for this section)"
-        parts.append(header + "\n" + body)
-    return "\n".join(parts)
+        return []
+    cues = []
+    for ev in obj.get("events", []):
+        line = "".join(s.get("utf8", "") for s in ev.get("segs", []) or []).strip()
+        line = re.sub(r"<[^>]+>", "", line).strip()
+        if line:
+            cues.append((ev.get("tStartMs", 0) / 1000.0, line))
+    return cues
 
 
-def _parse_vtt_text(data: str, chapters: list) -> str:
-    """Parse VTT subtitle text, split into chapters if provided."""
+def _cues_from_vtt(data: str) -> list:
     cues = []
     lines = data.splitlines()
     i = 0
@@ -90,27 +63,34 @@ def _parse_vtt_text(data: str, chapters: list) -> str:
             if text_parts:
                 cues.append((start_sec, " ".join(text_parts)))
         i += 1
+    return cues
+
+
+def _render(cues: list, chapters: list, timestamps: bool = False) -> str:
+    """Cues → text, de-duplicated (auto-captions repeat each line as it
+    scrolls), split into chapter sections if the video has chapters,
+    optionally with a [m:ss] stamp in front of every line."""
+    def fmt(t, text):
+        return f"[{fmt_time(t)}] {text}" if timestamps else text
+
+    seen, kept = set(), []
+    for t, text in cues:
+        if text not in seen:
+            seen.add(text)
+            kept.append((t, text))
 
     if not chapters:
-        seen, result = set(), []
-        for _, text in cues:
-            if text not in seen:
-                seen.add(text)
-                result.append(text)
-        return "\n".join(result)
+        return "\n".join(fmt(t, text) for t, text in kept)
 
     chapter_lines: dict = {i: [] for i in range(len(chapters))}
-    seen_global: set = set()
-    for t_sec, text in cues:
+    for t, text in kept:
         ch_idx = 0
         for i, ch in enumerate(chapters):
-            if t_sec >= ch["start_time"]:
+            if t >= ch["start_time"]:
                 ch_idx = i
             else:
                 break
-        if text not in seen_global:
-            seen_global.add(text)
-            chapter_lines[ch_idx].append(text)
+        chapter_lines[ch_idx].append(fmt(t, text))
 
     parts = []
     for i, ch in enumerate(chapters):
@@ -120,34 +100,106 @@ def _parse_vtt_text(data: str, chapters: list) -> str:
     return "\n".join(parts)
 
 
-def extract_transcript(url: str, log: LogFn = _default_log) -> Optional[Path]:
+def _parse_json3(data: str, chapters: list, timestamps: bool = False) -> str:
+    """Parse YouTube json3 subtitles, split into chapters if provided."""
+    return _render(_cues_from_json3(data), chapters, timestamps)
+
+
+def _parse_vtt_text(data: str, chapters: list, timestamps: bool = False) -> str:
+    """Parse VTT subtitle text, split into chapters if provided."""
+    return _render(_cues_from_vtt(data), chapters, timestamps)
+
+
+# ─────────────────────────────────────────────
+#  Which subtitle track to use
+# ─────────────────────────────────────────────
+def original_language(info: dict) -> Optional[str]:
+    """The language the video is spoken in — yt-dlp's `language` field,
+    or else read off YouTube's "<lang>-orig" speech-recognition track."""
+    lang = info.get("language")
+    if lang:
+        return lang
+    for code in (info.get("automatic_captions") or {}):
+        if code.endswith("-orig"):
+            return code[:-5]
+    return None
+
+
+def pick_track(info: dict, lang_pref: str = "auto") -> tuple:
     """
-    Extract an English transcript from YouTube subtitle tracks, split by
-    chapters if available. Saves a .txt file under DOWNLOAD_DIR and
-    returns its path, or None on failure.
+    (lang_code, source) of the subtitle track to build the transcript
+    from, or (None, None). source is "manual", "auto-generated", or
+    "YouTube auto-translated".
+      en   — English: human-made, else YouTube's speech recognition
+      ar   — Arabic: human-made, else Arabic speech recognition (Arabic
+             videos), else YouTube's Arabic auto-translation
+      auto — whatever the video is spoken in, falling back to English
     """
+    manual = info.get("subtitles") or {}
+    auto   = info.get("automatic_captions") or {}
+    orig   = original_language(info)
+    base_orig = (orig or "").split("-")[0]
+
+    order = []   # (pool, code-or-prefix)
+    if lang_pref == "ar":
+        order += [("manual", "ar"), ("auto", "ar-orig"), ("auto", "ar")]
+    if lang_pref == "auto" and base_orig and base_orig != "en":
+        order += [("manual", base_orig), ("auto", f"{orig}-orig"), ("auto", orig)]
+    if lang_pref in ("auto", "en"):
+        order += [("manual", "en"), ("auto", "en"), ("auto", "en-orig")]
+    if lang_pref == "auto":
+        order += [("manual", code) for code in sorted(manual)]
+        order += [("auto", code) for code in sorted(auto) if code.endswith("-orig")]
+
+    for pool, code in order:
+        if pool == "manual":
+            matches = sorted((c for c in manual if c == code or c.startswith(code + "-")),
+                             key=lambda c: (c != code, c))
+            if matches:
+                return matches[0], "manual"
+        elif code in auto:
+            spoken = code.endswith("-orig") or (base_orig and code.split("-")[0] == base_orig)
+            return code, "auto-generated" if spoken or not base_orig else "YouTube auto-translated"
+    return None, None
+
+
+# ─────────────────────────────────────────────
+#  Main entry point
+# ─────────────────────────────────────────────
+def extract_transcript(url: str, log: LogFn = _default_log, lang: Optional[str] = None,
+                       timestamps: Optional[bool] = None) -> Optional[Path]:
+    """
+    Extract a transcript from YouTube subtitle tracks, split by chapters
+    if available. Saves a .txt file under DOWNLOAD_DIR and returns its
+    path, or None on failure.
+    lang: "auto" (the video's own language) | "en" | "ar" — default from
+    settings, as is timestamps ([m:ss] before every line).
+    """
+    lang = lang or settings.get("transcript_lang")
+    timestamps = settings.get("transcript_timestamps") if timestamps is None else timestamps
+
     log("Fetching video info...", "info")
     try:
-        with yt_dlp.YoutubeDL({**base_opts(), "skip_download": True}) as ydl:
+        with yt_dlp.YoutubeDL({**base_opts(), "skip_download": True, "noplaylist": True}) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as e:
-        log(f"Error: {e}", "error")
+        log(f"Error: {clean_error(e)}", "error")
         return None
     if not info:
         log("Could not fetch video info.", "error")
         return None
 
-    title      = info.get("title", "Unknown Title")
-    channel    = info.get("uploader", info.get("channel", "Unknown Channel"))
-    duration_s = info.get("duration", 0)
-    upload_ts  = info.get("upload_date", "")
-    view_count = info.get("view_count", 0)
+    title      = info.get("title") or "Unknown Title"
+    channel    = info.get("uploader") or info.get("channel") or "Unknown Channel"
+    duration_s = info.get("duration") or 0
+    upload_ts  = info.get("upload_date") or ""
+    view_count = info.get("view_count") or 0
     video_url  = info.get("webpage_url", url)
     chapters   = info.get("chapters") or []
 
     upload_date = (f"{upload_ts[:4]}-{upload_ts[4:6]}-{upload_ts[6:]}"
                    if len(upload_ts) == 8 else upload_ts or "Unknown")
-    mins, secs   = divmod(int(duration_s or 0), 60)
+    mins, secs   = divmod(int(duration_s), 60)
     hrs, mins    = divmod(mins, 60)
     duration_str = f"{hrs}h {mins}m {secs}s" if hrs else f"{mins}m {secs}s"
 
@@ -156,25 +208,15 @@ def extract_transcript(url: str, log: LogFn = _default_log) -> Optional[Path]:
     else:
         log("No chapters — transcript will be continuous", "warn")
 
-    subs_dict = info.get("subtitles", {})
-    auto_dict = info.get("automatic_captions", {})
-
-    chosen_lang, chosen_source = None, None
-    for lang in ["en", "en-orig"] + sorted(subs_dict):
-        if lang.startswith("en") and lang in subs_dict:
-            chosen_lang, chosen_source = lang, "manual"
-            break
+    chosen_lang, chosen_source = pick_track(info, lang)
     if not chosen_lang:
-        for lang in ["en", "en-orig"] + sorted(auto_dict):
-            if lang.startswith("en") and lang in auto_dict:
-                chosen_lang, chosen_source = lang, "auto-generated"
-                break
-    if not chosen_lang:
-        log("No English subtitles available.", "warn")
+        wanted = {"en": "English", "ar": "Arabic"}.get(lang, "")
+        log(f"No {wanted + ' ' if wanted else ''}subtitles available for this video.", "warn")
         return None
     log(f"Using {chosen_lang} ({chosen_source})", "success")
 
-    track_list = (subs_dict if chosen_source == "manual" else auto_dict)[chosen_lang]
+    pool = info.get("subtitles") if chosen_source == "manual" else info.get("automatic_captions")
+    track_list = (pool or {})[chosen_lang]
     sub_url, sub_fmt = None, None
     for preferred in ("json3", "vtt", "ttml", "srv3", "srv2", "srv1"):
         for entry in track_list:
@@ -192,13 +234,14 @@ def extract_transcript(url: str, log: LogFn = _default_log) -> Optional[Path]:
 
     try:
         req = urllib.request.Request(sub_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             raw_data = resp.read().decode("utf-8", errors="replace")
     except Exception as e:
         log(f"Failed to fetch subtitle: {e}", "error")
         return None
 
-    raw_text = _parse_json3(raw_data, chapters) if sub_fmt == "json3" else _parse_vtt_text(raw_data, chapters)
+    raw_text = (_parse_json3(raw_data, chapters, timestamps) if sub_fmt == "json3"
+                else _parse_vtt_text(raw_data, chapters, timestamps))
     if not raw_text.strip():
         log("Transcript is empty after parsing.", "error")
         return None
@@ -228,8 +271,10 @@ def extract_transcript(url: str, log: LogFn = _default_log) -> Optional[Path]:
     if ch_summary:
         header += "CHAPTER INDEX:\n" + ch_summary
 
-    safe_title = re.sub(r'[\\/:*?"<>|]', "_", title)[:60].strip()
-    out_path   = DOWNLOAD_DIR / f"transcript_{upload_date}_{safe_title}.txt"
+    lang_tag = chosen_lang.split("-")[0]
+    suffix   = "" if lang_tag == "en" else f" ({lang_tag})"
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = DOWNLOAD_DIR / f"transcript_{upload_date}_{safe_file_stem(title)}{suffix}.txt"
     out_path.write_text(header + raw_text, encoding="utf-8")
 
     log(f"Transcript saved: {out_path}  ({word_count:,} words)", "success")

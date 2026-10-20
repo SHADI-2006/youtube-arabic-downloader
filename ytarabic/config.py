@@ -5,6 +5,10 @@ Configuration comes from environment variables, and from a local `.env`
 file in the project root if one exists (never committed — see .gitignore).
 The `.env` file wins only where the variable isn't already set in the
 environment, so an explicit shell variable always takes precedence.
+
+User preferences that can change at runtime (default quality, translation
+order, Gemini model, ...) live in settings.py instead — they're editable
+from the web UI without touching code.
 """
 
 import os
@@ -19,7 +23,11 @@ try:
 except ImportError:
     pass   # optional — env vars still work without it
 
-DOWNLOAD_DIR  = Path("downloads")
+# Anchored to the project root rather than the current directory, so
+# launching from somewhere else doesn't scatter a second downloads/ folder.
+# YTARABIC_DOWNLOAD_DIR overrides it (also what the tests use, to keep
+# their files out of your real library).
+DOWNLOAD_DIR  = Path(os.environ.get("YTARABIC_DOWNLOAD_DIR") or PROJECT_ROOT / "downloads")
 PROGRESS_FILE = DOWNLOAD_DIR / ".progress.json"
 
 MAX_RETRIES = 5     # retries per video on network failure
@@ -35,8 +43,9 @@ COOKIES_FILE = os.environ.get("YT_COOKIES_FILE", "")
 # logged into instagram.com.
 INSTAGRAM_COOKIES_FILE = os.environ.get("INSTAGRAM_COOKIES_FILE", "")
 
-# Gemini model used for auto-translation (see subtitles.py for the
-# full Arabic-subtitle priority chain)
+# Default Gemini model used for auto-translation and summaries — the one
+# actually used is the "gemini_model" setting (Settings tab), which starts
+# out as this. See subtitles.py for the full Arabic-subtitle priority chain.
 GEMINI_MODEL      = "gemini-3.5-flash-lite"
 GEMINI_RETRIES    = 2    # extra attempts on transient server/connection errors
 GEMINI_RETRY_WAIT = 5    # seconds between those retries (never retries a 429)
@@ -46,17 +55,21 @@ GEMINI_TIMEOUT    = 90   # seconds — without this, a stalled request hangs for
                           # A 150-cue chunk measured ~33s under light load but 60-90s+
                           # under heavier account contention, so 30s was timing out on
                           # essentially every request — 90s gives real margin.
+GEMINI_SUMMARY_TIMEOUT = 240   # a whole multi-hour transcript in one request
 
 # ── Runtime constants ──
-HAS_FFMPEG = shutil.which("ffmpeg") is not None
+FFMPEG_PATH = shutil.which("ffmpeg")
+HAS_FFMPEG  = FFMPEG_PATH is not None
 UTF8_BOM   = b"\xef\xbb\xbf"
 SUB_EXTS   = {".srt", ".vtt", ".ass", ".ssa"}
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".avi", ".mov"}
 VALID_VIDEO_EXTS = {".mp4", ".mkv", ".webm"}   # completed video files only
+AUDIO_EXTS = {".mp3", ".m4a", ".opus", ".ogg"}  # completed audio-only downloads
 MIN_VIDEO_BYTES  = 100 * 1024                   # 100 KB — ignore empty/partial files
-AR_TAGS    = ("ar.", "ar-", ".ar_", "arabic", ".ara.", "ar-orig")
 
 SUBTITLES_EN = ["en"]        # exact match — one file only
+
+AUDIO_ONLY_KEY = "6"
 
 QUALITY_OPTIONS = {
     "1": ("2160p  4K",
@@ -79,7 +92,14 @@ QUALITY_OPTIONS = {
           "bestaudio[ext=m4a]/bestaudio"),
 }
 
+# Max video height per quality key (audio-only has none)
+QUALITY_HEIGHT = {"1": 2160, "2": 1080, "3": 720, "4": 480, "5": 360}
+
 
 def get_fmt(key: str) -> str:
     _, with_ff, no_ff = QUALITY_OPTIONS[key]
     return with_ff if HAS_FFMPEG else no_ff
+
+
+def quality_label(key: str) -> str:
+    return QUALITY_OPTIONS.get(key, (key,))[0]

@@ -23,3 +23,6 @@ Thumbs.db
 .env
 *.env
 *cookies*.txt
+
+# Preferences saved from the web UI (Settings tab)
+settings.json

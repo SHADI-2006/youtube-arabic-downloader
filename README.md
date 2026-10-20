@@ -10,28 +10,47 @@ extracting clean transcripts to feed into an LLM for analysis.
 
 ## Features
 
+- **One box for every link** — paste a YouTube, Instagram or X link (or
+  several, one per line) and it shows a preview first: thumbnail, title,
+  duration, the size of each quality, and which Arabic subtitle you'll get.
+  Several links are queued one after another.
 - **YouTube video & playlist download** — resumable, quality selection
-  (360p–4K or audio-only), automatic retry on network failures, and a
-  **Stop button** that cancels cleanly mid-download or mid-translation.
-- **Download history** — every download, transcript, and extraction is
-  logged (title, time, status), so you can see what happened even after
-  closing the browser tab.
-- **Arabic subtitles, always** — a 4-tier priority chain finds the best
-  Arabic subtitle available, and translates one itself if YouTube has none:
+  (360p–4K or MP3), automatic retry on network failures, an optional speed
+  limit, and a **Stop button** that cancels cleanly mid-download or
+  mid-translation. For a playlist, **pick which videos** to download
+  (checkboxes, or a range like `1-10, 15`); Resume remembers the selection.
+- **Arabic subtitles, always** — a priority chain finds the best Arabic
+  subtitle available, and translates one itself if YouTube has none:
   1. Real, human-authored Arabic subtitle (if YouTube has one).
-  2. [Gemini](https://aistudio.google.com/apikey) (free tier) — reads the
-     whole subtitle file for a natural, context-aware translation instead
-     of translating cue-by-cue in isolation.
-  3. YouTube's own auto-translated Arabic captions.
-  4. Google Translate — always free, no key, final safety net.
-- **Retry a missing subtitle** without re-downloading the video.
+  2. YouTube's own auto-translated Arabic captions, or
+     [Gemini](https://aistudio.google.com/apikey) (free tier) — which one
+     goes first is a setting. Gemini reads the whole subtitle file for a
+     natural, context-aware translation instead of cue-by-cue.
+  3. Google Translate — always free, no key, final safety net.
+
+  Subtitles can be Arabic, Arabic + English, English only, or none — and
+  can be **embedded into the video file** as a switchable track.
+- **Library** — every downloaded video with its subtitles (and which engine
+  made the Arabic one), a **built-in player** with Arabic subtitles,
+  "show in folder", and per-video actions: re-translate with Gemini / Google
+  / YouTube, fetch English, embed subtitles, extract the transcript.
+- **Clean up leftovers** — finds the partial files interrupted downloads
+  leave behind (often hundreds of MB) and frees them; resumable ones are
+  kept unless you say otherwise.
+- **Transcripts** — plain text split by chapters, in the video's own
+  language, English, or Arabic, optionally with timestamps. View and copy
+  them in the app, or **summarize in Arabic (or English) with Gemini**.
+- **Twitter/X thread extraction** — text + images.
 - **Instagram Reels** download.
-- **Twitter/X thread extraction** — text + images, ready to read or feed
-  to an LLM.
-- **YouTube transcript extraction** — plain-text transcript split by
-  chapters, for pasting into Claude/ChatGPT for analysis.
+- **History** — every download, transcript, and extraction is logged, with
+  search, filters, and one-click retry.
+- **Settings in the UI** — default quality, subtitles, translation order,
+  Gemini model, speed limit, transcript language; no code edits needed.
+- **English or Arabic interface** (full right-to-left layout), desktop
+  notifications when a download finishes.
 - **Two interfaces on the same core logic**: a polished terminal UI, and a
-  local web app with live progress streamed over WebSocket.
+  local web app with live progress streamed over WebSocket. The web app
+  only answers to your own browser — other websites can't drive it.
 
 ## Installation
 
@@ -83,21 +102,41 @@ python cli.py
 
 or on Windows, double-click `run.bat`.
 
+Preferences you change in the web UI's **Settings** tab are saved to
+`settings.json` in the project folder (git-ignored); the terminal interface
+uses the same file.
+
+## Tests
+
+```bash
+python -m unittest discover -s tests -t .
+```
+
+The tests use a throwaway downloads folder and settings file, never your
+real ones, and make no network requests.
+
 ## Project structure
 
 ```
-ytarabic/            core logic — no UI code, reusable by any front-end
-  config.py          settings, .env loading
-  youtube.py          video/playlist download, size estimation
+ytarabic/              core logic — no UI code, reusable by any front-end
+  config.py            fixed config, .env loading
+  settings.py          user preferences (settings.json), editable from the UI
+  youtube.py           link preview, video/playlist download, size estimation
   subtitles.py         Arabic subtitle priority chain + translation engines
-  social.py             Twitter/X extraction
-  transcript.py       YouTube transcript extraction
-  progress_store.py  resumable-download progress tracking
-  utils.py               small formatting helpers
-cli.py               terminal interface (rich)
-webapp/             local web interface (FastAPI + WebSocket)
-  server.py          REST endpoints, job runner, event broadcast
-  static/             single-page frontend (no build step)
+  gemini.py            shared Gemini client + retry policy
+  media.py             FFmpeg helpers: embed subtitles, SRT → WebVTT
+  library.py           downloaded files, leftovers cleanup, saved transcripts
+  transcript.py        YouTube transcript extraction
+  summary.py           Gemini summaries of transcripts
+  social.py            Twitter/X extraction
+  progress_store.py    resume progress, history, completed-video index
+  utils.py             URL + formatting helpers
+cli.py                 terminal interface (rich)
+webapp/                local web interface (FastAPI + WebSocket)
+  server.py            REST endpoints, local-only guard, event broadcast
+  jobs.py              job queue + live progress events
+  static/              single-page frontend (no build step), English/Arabic
+tests/                 unit tests (python -m unittest)
 ```
 
 Every core function accepts a `log(message, level)` callback instead of

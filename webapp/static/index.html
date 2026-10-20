@@ -1,137 +1,358 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" dir="ltr">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ytarabic — downloader</title>
-  <link rel="stylesheet" href="/static/style.css" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬇</text></svg>" />
+  <meta name="color-scheme" content="dark" />
+  <title>ytarabic</title>
+  <link rel="stylesheet" href="/static/style.css?v=__V__" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%234f9dff'/><stop offset='1' stop-color='%237c5cff'/></linearGradient></defs><rect width='32' height='32' rx='8' fill='url(%23g)'/><path d='M16 8v12m0 0l-5-5m5 5l5-5M9 24h14' stroke='white' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="logo">⬇</span>
+      <span class="logo"><i data-icon="download"></i></span>
       <div>
         <h1>ytarabic</h1>
-        <p class="tagline">YouTube · Instagram · X — with automatic Arabic subtitles</p>
+        <p class="tagline" data-i18n="tagline">YouTube · Instagram · X — with automatic Arabic subtitles</p>
       </div>
     </div>
-    <div class="pills" id="statusPills"></div>
+    <div class="top-actions">
+      <div class="pills" id="statusPills"></div>
+      <button class="btn ghost sm" id="btnLang" type="button"><i data-icon="globe"></i><span id="langLabel">عربي</span></button>
+    </div>
   </header>
 
-  <nav class="tabs" id="tabs">
-    <button class="tab active" data-tab="download">Download</button>
-    <button class="tab" data-tab="resume">Resume</button>
-    <button class="tab" data-tab="extract">Transcript &amp; X</button>
-    <button class="tab" data-tab="instagram">Instagram</button>
-    <button class="tab" data-tab="subs">Fix Subtitles</button>
-    <button class="tab" data-tab="history">History</button>
+  <nav class="tabs" id="tabs" role="tablist">
+    <button class="tab active" data-tab="download" role="tab"><i data-icon="download"></i><span data-i18n="tab_download">Download</span></button>
+    <button class="tab" data-tab="library" role="tab"><i data-icon="film"></i><span data-i18n="tab_library">Library</span></button>
+    <button class="tab" data-tab="transcripts" role="tab"><i data-icon="text"></i><span data-i18n="tab_transcripts">Transcripts</span></button>
+    <button class="tab" data-tab="resume" role="tab"><i data-icon="resume"></i><span data-i18n="tab_resume">Resume</span><span class="tab-badge hidden" id="resumeBadge"></span></button>
+    <button class="tab" data-tab="history" role="tab"><i data-icon="clock"></i><span data-i18n="tab_history">History</span></button>
+    <button class="tab" data-tab="settings" role="tab"><i data-icon="sliders"></i><span data-i18n="tab_settings">Settings</span></button>
   </nav>
 
   <div class="workspace">
   <main>
-    <!-- Download -->
+    <!-- ───────── Download ───────── -->
     <section class="panel active" id="tab-download">
-      <label class="field">
-        <span>Video or playlist URL</span>
-        <input type="text" id="dlUrl" placeholder="https://www.youtube.com/watch?v=…" />
-      </label>
+      <div class="url-box">
+        <i data-icon="link" class="url-icon"></i>
+        <textarea id="dlUrl" rows="1" spellcheck="false" autocomplete="off" dir="ltr" data-i18n-ph="url_placeholder"></textarea>
+        <button class="btn ghost sm" id="btnPaste" type="button"><i data-icon="clipboard"></i><span data-i18n="paste">Paste</span></button>
+        <button class="icon-btn hidden" id="btnClearUrl" type="button" data-i18n-title="clear"><i data-icon="x"></i></button>
+      </div>
+      <p class="hint url-hint" data-i18n="url_hint">One link, or several (one per line) to queue them all. Press Enter to start.</p>
 
-      <div class="row">
-        <label class="field grow">
-          <span>Quality</span>
-          <select id="dlQuality"></select>
-        </label>
-        <button class="btn ghost" id="btnSizes">Estimate sizes</button>
+      <div id="preview"></div>
+
+      <div class="options" id="dlOptions">
+        <div class="opt-head" data-i18n="quality">Quality</div>
+        <div class="quality-grid" id="qualityGrid"></div>
+
+        <div class="opt-row">
+          <label class="field compact" id="dlSubModeWrap">
+            <span data-i18n="subtitles">Subtitles</span>
+            <select id="dlSubMode">
+              <option value="ar" data-i18n="sub_ar">Arabic</option>
+              <option value="ar_en" data-i18n="sub_ar_en">Arabic + English</option>
+              <option value="en" data-i18n="sub_en">English only</option>
+              <option value="none" data-i18n="sub_none">No subtitles</option>
+            </select>
+          </label>
+          <div class="switches">
+            <label class="switch" id="dlEmbedWrap"><input type="checkbox" id="dlEmbed" /><span class="track"></span><span data-i18n="embed_subs">Embed subtitles into the video file</span></label>
+            <label class="switch" id="dlTranscriptWrap"><input type="checkbox" id="dlTranscript" /><span class="track"></span><span data-i18n="also_transcript">Also save a transcript</span></label>
+          </div>
+        </div>
       </div>
 
-      <div class="row checks">
-        <label class="check"><input type="checkbox" id="dlPlaylist" /> <span>This is a playlist</span></label>
-        <label class="check"><input type="checkbox" id="dlTranscript" /> <span>Also extract transcript</span></label>
+      <div class="action-row">
+        <button class="btn primary lg" id="btnDownload" type="button"><i data-icon="download"></i><span id="btnDownloadLabel" data-i18n="start_download">Download</span></button>
+        <span class="hint" id="dlHint"></span>
       </div>
 
-      <div id="playlistPreview" class="preview hidden"></div>
-
-      <button class="btn primary" id="btnDownload">Start download</button>
-
-      <div class="explain">
-        <div class="row between" style="margin-bottom:10px">
-          <h2 style="margin:0">Recent activity</h2>
-          <p class="hint" style="margin:0">Arabic priority: human → Gemini → YouTube auto → Google Translate</p>
+      <section class="block">
+        <div class="section-head">
+          <h2 data-i18n="recent_activity">Recent activity</h2>
+          <button class="link-btn" type="button" data-goto="history" data-i18n="see_all">See all</button>
         </div>
         <div id="recentList" class="cards"></div>
-      </div>
+      </section>
     </section>
 
-    <!-- Resume -->
+    <!-- ───────── Library ───────── -->
+    <section class="panel" id="tab-library">
+      <div class="toolbar">
+        <div class="search">
+          <i data-icon="search"></i>
+          <input type="search" id="libSearch" data-i18n-ph="search_library" />
+        </div>
+        <select id="libFilter" class="select-sm">
+          <option value="all" data-i18n="filter_all">All</option>
+          <option value="missing" data-i18n="filter_missing_ar">Missing Arabic</option>
+          <option value="video" data-i18n="filter_video">Videos</option>
+          <option value="audio" data-i18n="filter_audio">Audio</option>
+        </select>
+        <button class="icon-btn" id="btnLibRefresh" type="button" data-i18n-title="refresh"><i data-icon="refresh"></i></button>
+        <button class="btn ghost sm" id="btnOpenRoot" type="button"><i data-icon="folder"></i><span data-i18n="open_folder">Open folder</span></button>
+      </div>
+      <div id="libStats" class="stats-row"></div>
+      <div id="leftoverBanner" class="banner hidden"></div>
+      <div id="libList" class="lib-list"></div>
+    </section>
+
+    <!-- ───────── Transcripts ───────── -->
+    <section class="panel" id="tab-transcripts">
+      <div class="url-box single">
+        <i data-icon="link" class="url-icon"></i>
+        <input type="text" id="exUrl" dir="ltr" spellcheck="false" data-i18n-ph="transcript_placeholder" />
+      </div>
+      <div class="opt-row">
+        <label class="field compact">
+          <span data-i18n="transcript_lang">Language</span>
+          <select id="exLang">
+            <option value="auto" data-i18n="lang_auto">Video's own language</option>
+            <option value="en">English</option>
+            <option value="ar">العربية</option>
+          </select>
+        </label>
+        <div class="switches">
+          <label class="switch"><input type="checkbox" id="exTimestamps" /><span class="track"></span><span data-i18n="with_timestamps">Timestamps on every line</span></label>
+        </div>
+      </div>
+      <div class="action-row">
+        <button class="btn primary" id="btnTranscript" type="button"><i data-icon="text"></i><span data-i18n="extract_transcript">Extract transcript</span></button>
+        <button class="btn" id="btnTweet" type="button"><i data-icon="hash"></i><span data-i18n="extract_thread">Extract X thread</span></button>
+      </div>
+      <p class="hint" data-i18n="transcript_hint">A YouTube transcript is saved as plain text, split by chapters — ready to read, copy into an AI chat, or summarize here with Gemini.</p>
+
+      <section class="block">
+        <div class="section-head">
+          <h2 data-i18n="saved_transcripts">Saved transcripts</h2>
+          <button class="icon-btn" id="btnTrRefresh" type="button" data-i18n-title="refresh"><i data-icon="refresh"></i></button>
+        </div>
+        <div id="trList" class="cards"></div>
+      </section>
+    </section>
+
+    <!-- ───────── Resume ───────── -->
     <section class="panel" id="tab-resume">
-      <div class="row between">
-        <p class="hint">Playlists and videos that didn't finish — pick up exactly where you stopped.</p>
-        <button class="btn ghost" id="btnRefreshResume">Refresh</button>
+      <div class="section-head">
+        <p class="hint" data-i18n="resume_hint">Playlists and videos that didn't finish — pick up exactly where they stopped.</p>
+        <button class="icon-btn" id="btnRefreshResume" type="button" data-i18n-title="refresh"><i data-icon="refresh"></i></button>
       </div>
       <div id="resumeList" class="cards"></div>
     </section>
 
-    <!-- Transcript & X -->
-    <section class="panel" id="tab-extract">
-      <label class="field">
-        <span>YouTube video, or Twitter/X post URL</span>
-        <input type="text" id="exUrl" placeholder="https://…" />
-      </label>
-      <div class="row">
-        <button class="btn primary" id="btnTranscript">Extract transcript</button>
-        <button class="btn" id="btnTweet">Extract X thread</button>
-      </div>
-      <p class="hint">Transcripts are saved as plain text, split by chapters — ready to paste into an LLM.</p>
-    </section>
-
-    <!-- Instagram -->
-    <section class="panel" id="tab-instagram">
-      <label class="field">
-        <span>Reel URLs — one per line</span>
-        <textarea id="igUrls" rows="6" placeholder="https://www.instagram.com/reel/…"></textarea>
-      </label>
-      <button class="btn primary" id="btnInstagram">Download reels</button>
-    </section>
-
-    <!-- Subtitles -->
-    <section class="panel" id="tab-subs">
-      <div class="row">
-        <label class="field grow">
-          <span>Search downloaded videos</span>
-          <input type="text" id="subQuery" placeholder="Type part of a title…" />
-        </label>
-        <button class="btn ghost" id="btnSearchSubs">Search</button>
-      </div>
-      <p class="hint">Fetch a missing Arabic subtitle without re-downloading the video.</p>
-      <div id="subsList" class="cards"></div>
-    </section>
-
-    <!-- History -->
+    <!-- ───────── History ───────── -->
     <section class="panel" id="tab-history">
-      <div class="row between">
-        <p class="hint">Everything downloaded or extracted so far, newest first.</p>
-        <button class="btn ghost" id="btnRefreshHistory">Refresh</button>
+      <div class="toolbar">
+        <div class="search">
+          <i data-icon="search"></i>
+          <input type="search" id="histSearch" data-i18n-ph="search_history" />
+        </div>
+        <select id="histKind" class="select-sm">
+          <option value="all" data-i18n="filter_all">All</option>
+          <option value="video" data-i18n="kind_video">Video</option>
+          <option value="playlist" data-i18n="kind_playlist">Playlist</option>
+          <option value="transcript" data-i18n="kind_transcript">Transcript</option>
+          <option value="summary" data-i18n="kind_summary">Summary</option>
+          <option value="subtitle" data-i18n="kind_subtitle">Subtitle</option>
+          <option value="tweet" data-i18n="kind_tweet">X thread</option>
+          <option value="instagram" data-i18n="kind_instagram">Instagram</option>
+        </select>
+        <select id="histStatus" class="select-sm">
+          <option value="all" data-i18n="status_all">Any status</option>
+          <option value="success" data-i18n="status_success">Succeeded</option>
+          <option value="failed" data-i18n="status_failed">Failed</option>
+          <option value="cancelled" data-i18n="status_cancelled">Stopped</option>
+        </select>
+        <button class="btn ghost sm danger-text" id="btnClearHistory" type="button"><i data-icon="trash"></i><span data-i18n="clear_history">Clear</span></button>
       </div>
       <div id="historyList" class="cards"></div>
+    </section>
+
+    <!-- ───────── Settings ───────── -->
+    <section class="panel" id="tab-settings">
+      <form id="settingsForm" class="settings" autocomplete="off">
+        <fieldset>
+          <legend data-i18n="set_downloads">Downloads</legend>
+          <div class="grid-2">
+            <label class="field"><span data-i18n="set_default_quality">Default quality</span><select name="default_quality" id="setQuality"></select></label>
+            <label class="field">
+              <span data-i18n="set_rate_limit">Speed limit</span>
+              <div class="input-suffix"><input type="number" name="rate_limit_mb" min="0" step="0.5" /><span>MB/s</span></div>
+              <small data-i18n="set_rate_limit_hint">0 = unlimited. Handy so a big download doesn't eat the whole connection.</small>
+            </label>
+            <label class="field">
+              <span data-i18n="set_sub_mode">Subtitles by default</span>
+              <select name="subtitle_mode">
+                <option value="ar" data-i18n="sub_ar">Arabic</option>
+                <option value="ar_en" data-i18n="sub_ar_en">Arabic + English</option>
+                <option value="en" data-i18n="sub_en">English only</option>
+                <option value="none" data-i18n="sub_none">No subtitles</option>
+              </select>
+            </label>
+          </div>
+          <label class="switch"><input type="checkbox" name="embed_subtitles" /><span class="track"></span><span data-i18n="set_embed">Embed subtitles into the video file by default (soft track — can be switched off in the player)</span></label>
+        </fieldset>
+
+        <fieldset>
+          <legend data-i18n="set_translation">Arabic translation</legend>
+          <p class="hint" data-i18n="set_translation_hint">A real (human-made) Arabic subtitle is always used first when YouTube has one. Otherwise:</p>
+          <div class="radio-cards">
+            <label class="radio-card">
+              <input type="radio" name="translation_order" value="youtube_first" />
+              <span class="rc-body"><strong data-i18n="order_youtube">YouTube's translation first</strong><small data-i18n="order_youtube_hint">Instant and free. Gemini is only used when YouTube has no Arabic translation.</small></span>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="translation_order" value="gemini_first" />
+              <span class="rc-body"><strong data-i18n="order_gemini">Gemini first</strong><small data-i18n="order_gemini_hint">Usually more natural — reads the whole video for context. Uses your free Gemini quota.</small></span>
+            </label>
+          </div>
+          <label class="field">
+            <span data-i18n="set_gemini_model">Gemini model</span>
+            <input type="text" name="gemini_model" list="geminiModels" dir="ltr" spellcheck="false" />
+            <datalist id="geminiModels">
+              <option value="gemini-3.5-flash-lite"></option>
+              <option value="gemini-3.6-flash"></option>
+            </datalist>
+            <small data-i18n="set_gemini_model_hint">Used for translation and summaries. Change it here instead of in the code when Google releases a new model.</small>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend data-i18n="set_transcripts">Transcripts &amp; summaries</legend>
+          <div class="grid-2">
+            <label class="field">
+              <span data-i18n="transcript_lang">Language</span>
+              <select name="transcript_lang">
+                <option value="auto" data-i18n="lang_auto">Video's own language</option>
+                <option value="en">English</option>
+                <option value="ar">العربية</option>
+              </select>
+            </label>
+            <label class="field">
+              <span data-i18n="set_summary_lang">Summary language</span>
+              <select name="summary_lang">
+                <option value="ar">العربية</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+          </div>
+          <label class="switch"><input type="checkbox" name="transcript_timestamps" /><span class="track"></span><span data-i18n="with_timestamps">Timestamps on every line</span></label>
+        </fieldset>
+
+        <fieldset>
+          <legend data-i18n="set_interface">Interface</legend>
+          <div class="grid-2">
+            <label class="field">
+              <span data-i18n="set_ui_lang">Interface language</span>
+              <select id="setUiLang">
+                <option value="en">English</option>
+                <option value="ar">العربية</option>
+              </select>
+            </label>
+          </div>
+          <label class="switch"><input type="checkbox" id="setNotify" /><span class="track"></span><span data-i18n="set_notify">Desktop notification when a download finishes (while this tab is in the background)</span></label>
+        </fieldset>
+
+        <fieldset>
+          <legend data-i18n="set_environment">Setup</legend>
+          <div id="envInfo" class="env-grid"></div>
+        </fieldset>
+
+        <div class="action-row">
+          <button type="button" class="btn ghost" id="btnResetSettings" data-i18n="reset_defaults">Reset to defaults</button>
+          <span class="hint" data-i18n="autosave_hint">Changes are saved automatically.</span>
+        </div>
+      </form>
     </section>
   </main>
 
   <aside class="console">
     <div class="console-head">
-      <span class="console-title">Activity</span>
-      <button class="btn stop hidden" id="btnStop">■ Stop</button>
+      <span class="console-title" data-i18n="activity">Activity</span>
+      <div class="console-actions">
+        <button class="icon-btn" id="btnClearLog" type="button" data-i18n-title="clear_log"><i data-icon="eraser"></i></button>
+        <button class="btn stop sm hidden" id="btnStop" type="button"><i data-icon="stop"></i><span data-i18n="stop">Stop</span></button>
+      </div>
+    </div>
+    <div class="now hidden" id="nowBox">
+      <div class="now-label" id="nowLabel" dir="auto"></div>
+      <div class="now-item" id="nowItem" dir="auto"></div>
     </div>
     <div class="progress-row">
-      <div class="progress"><div class="bar" id="progressBar"></div></div>
-      <span class="progress-label" id="progressLabel">Idle</span>
+      <div class="progress" id="progressTrack"><div class="bar" id="progressBar"></div></div>
+      <span class="progress-pct" id="progressPct"></span>
     </div>
+    <div class="progress-detail" id="progressLabel"></div>
     <div class="queue-box hidden" id="queueBox"></div>
-    <div class="log" id="log"></div>
-    <div class="console-foot" id="downloadDir"></div>
+    <div class="log" id="log" aria-live="polite"></div>
+    <div class="console-foot">
+      <button class="link-btn" type="button" id="btnFootFolder"><i data-icon="folder"></i><span id="downloadDir"></span></button>
+    </div>
   </aside>
   </div>
 
-  <script src="/static/app.js"></script>
+  <!-- Player -->
+  <dialog id="playerDlg" class="dlg wide">
+    <div class="dlg-head">
+      <h3 id="playerTitle" dir="auto"></h3>
+      <button class="icon-btn" type="button" data-close data-i18n-title="close"><i data-icon="x"></i></button>
+    </div>
+    <div class="player-wrap">
+      <video id="playerVideo" controls playsinline preload="metadata" class="cue-m"></video>
+      <div class="player-error hidden" id="playerError"></div>
+    </div>
+    <div class="player-bar">
+      <label class="field compact inline">
+        <span data-i18n="subtitles">Subtitles</span>
+        <select id="playerSubs" class="select-sm"></select>
+      </label>
+      <div class="seg" id="cueSize">
+        <button type="button" data-size="s">A</button>
+        <button type="button" data-size="m" class="on">A</button>
+        <button type="button" data-size="l">A</button>
+      </div>
+      <span class="grow"></span>
+      <button class="btn ghost sm" type="button" id="playerFolder"><i data-icon="folder"></i><span data-i18n="show_in_folder">Show in folder</span></button>
+    </div>
+  </dialog>
+
+  <!-- Transcript / summary viewer -->
+  <dialog id="textDlg" class="dlg wide">
+    <div class="dlg-head">
+      <h3 id="textTitle" dir="auto"></h3>
+      <button class="icon-btn" type="button" data-close data-i18n-title="close"><i data-icon="x"></i></button>
+    </div>
+    <div class="text-tabs" id="textTabs"></div>
+    <div class="text-body" id="textBody" dir="auto"></div>
+    <div class="dlg-foot">
+      <span class="hint" id="textMeta"></span>
+      <span class="grow"></span>
+      <button class="btn ghost sm" type="button" id="textFolder"><i data-icon="folder"></i><span data-i18n="show_in_folder">Show in folder</span></button>
+      <button class="btn sm" type="button" id="textSummarize"><i data-icon="sparkle"></i><span data-i18n="summarize">Summarize</span></button>
+      <button class="btn primary sm" type="button" id="textCopy"><i data-icon="copy"></i><span data-i18n="copy">Copy</span></button>
+    </div>
+  </dialog>
+
+  <!-- Cleanup -->
+  <dialog id="cleanupDlg" class="dlg">
+    <div class="dlg-head">
+      <h3 data-i18n="cleanup_title">Clean up leftover files</h3>
+      <button class="icon-btn" type="button" data-close data-i18n-title="close"><i data-icon="x"></i></button>
+    </div>
+    <div class="dlg-body" id="cleanupBody"></div>
+    <div class="dlg-foot">
+      <span class="grow"></span>
+      <button class="btn ghost sm" type="button" data-close data-i18n="cancel">Cancel</button>
+      <button class="btn danger sm" type="button" id="cleanupConfirm"><i data-icon="trash"></i><span id="cleanupConfirmLabel" data-i18n="delete">Delete</span></button>
+    </div>
+  </dialog>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="/static/app.js?v=__V__"></script>
 </body>
 </html>
